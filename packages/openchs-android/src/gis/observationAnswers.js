@@ -9,13 +9,32 @@ import _ from "lodash";
 
 export const MULTI_SELECT_SEPARATOR = " + ";
 
-// The observation for a concept, matched by uuid when given, else by name.
-export function findObservation(observations, concept) {
-    if (_.isEmpty(observations) || _.isNil(concept)) return null;
-    const matches = concept.uuid
-        ? obs => _.get(obs, "concept.uuid") === concept.uuid
-        : obs => _.get(obs, "concept.name") === concept.name;
-    return _.find(observations, matches) || null;
+const items = list => Array.from(list || []);  // Realm lists are iterable but not arrays
+
+// Everything a household has answered: registration, then enrolments, then visits newest first.
+export function subjectObservations(subject) {
+    const enrolments = _.reject(items(subject.enrolments), "voided");
+    const encounters = _.reject(_.flatMap([subject, ...enrolments], e => items(e.encounters)), "voided");
+    const newestFirst = _.orderBy(encounters, e => e.encounterDateTime ? new Date(e.encounterDateTime).getTime() : 0, "desc");
+    return _.flatMap([subject, ...enrolments, ...newestFirst], e => items(e.observations));
+}
+
+// {conceptUuid: observation}, first one wins, so every concept is a lookup instead of a scan (Realm reads are slow).
+export function answerIndex(subject, {registrationOnly = false} = {}) {
+    const index = {};
+    _.forEach(registrationOnly ? items(subject.observations) : subjectObservations(subject), observation => {
+        const uuid = _.get(observation, "concept.uuid");
+        if (uuid && !index[uuid]) index[uuid] = observation;
+    });
+    return index;
+}
+
+// Whether an observation carries a value, without resolving what it says.
+export function hasAnswer(observation) {
+    if (_.isNil(observation)) return false;
+    const wrapper = observation.getValueWrapper();
+    const value = wrapper && wrapper.getValue();
+    return !_.isNil(value) && value !== "" && !(_.isArray(value) && _.isEmpty(value));
 }
 
 function answerOrder(concept) {
@@ -27,19 +46,27 @@ function answerOrder(concept) {
     return order;
 }
 
-function codedLabels(observation, conceptService) {
-    const wrapper = observation.getValueWrapper();
-    const value = wrapper.getValue();
-    const uuids = _.isArray(value) ? value : [value];
-    const order = answerOrder(observation.concept);
-    return _(uuids)
+// value -> labels for one concept: the answer order and names are read once, then reused for every household.
+export function valueLabeller(concept, conceptService) {
+    if (concept.datatype !== Concept.dataType.Coded) return value => (_.isNil(value) || value === "" ? [] : [String(value)]);
+    const order = answerOrder(concept);
+    const names = {};
+    const nameOf = uuid => {
+        if (!(uuid in names)) {
+            const answerConcept = conceptService.getConceptByUUID(uuid);
+            names[uuid] = answerConcept ? answerConcept.name : uuid;
+        }
+        return names[uuid];
+    };
+    return value => _(_.isArray(value) ? value : [value])
         .filter(uuid => !_.isNil(uuid) && uuid !== "")
         .sortBy(uuid => _.get(order, uuid, Number.MAX_SAFE_INTEGER))
-        .map(uuid => {
-            const answerConcept = conceptService.getConceptByUUID(uuid);
-            return answerConcept ? answerConcept.name : uuid;
-        })
+        .map(nameOf)
         .value();
+}
+
+export function labelsForValue(concept, value, conceptService) {
+    return valueLabeller(concept, conceptService)(value);
 }
 
 // Display labels for one observation: [] when there is no value, one label
@@ -47,17 +74,14 @@ function codedLabels(observation, conceptService) {
 // concept's answer order) for multi-select.
 export function answerLabels(observation, conceptService) {
     if (_.isNil(observation) || _.isNil(observation.concept)) return [];
-    const datatype = observation.concept.datatype;
-    if (datatype === Concept.dataType.Coded) return codedLabels(observation, conceptService);
     const wrapper = observation.getValueWrapper();
     if (_.isNil(wrapper)) return [];
+    const datatype = observation.concept.datatype;
     if ((datatype === Concept.dataType.Date || datatype === Concept.dataType.DateTime) && wrapper.asDisplayDate) {
         const shown = wrapper.asDisplayDate();
         return _.isEmpty(shown) ? [] : [shown];
     }
-    const value = wrapper.getValue();
-    if (_.isNil(value) || value === "") return [];
-    return [String(value)];
+    return labelsForValue(observation.concept, wrapper.getValue(), conceptService);
 }
 
 // The single key the map colours a household by. A multi-select household

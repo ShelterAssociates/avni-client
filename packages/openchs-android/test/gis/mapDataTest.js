@@ -2,8 +2,8 @@ import _ from "lodash";
 import {assert} from "chai";
 import {Concept} from "avni-models";
 import {
-    DUPLICATES_FILTER_KEY, STATUS, applyConceptFilter, applyDuplicateFilter, applyFilter, buildFilterCatalog,
-    buildStatusMap, canViewSubjectType, codedConceptsOnForm, duplicateCount,
+    DUPLICATES_FILTER_KEY, STATUS, answerTable, applyConceptFilter, applyDuplicateFilter, applyFilter, buildFilterCatalog,
+    buildStatusMap, canViewSubjectType, codedConceptsOnForm, codedConceptsOnForms, duplicateCount,
 } from "../../src/gis/mapData";
 import {ANSWER_PALETTE} from "../../src/gis/colorCoding";
 
@@ -46,21 +46,35 @@ describe("buildStatusMap", () => {
 describe("buildFilterCatalog", () => {
     const statusMap = buildStatusMap(subjects);
 
-    it("offers a filter per coded question that has data in this slum, plus duplicates, in form order", () => {
-        const filters = buildFilterCatalog({concepts: [OCCUPANCY, TOILET], subjects, conceptService, statusMap});
+    it("offers a filter per coded question that has data in this slum, plus duplicates, in form order", async () => {
+        const {filters} = await buildFilterCatalog({concepts: [OCCUPANCY, TOILET], subjects, conceptService, statusMap});
         assert.deepEqual(filters.map(f => f.key), [DUPLICATES_FILTER_KEY, TOILET.uuid]);
         assert.equal(filters[1].count, 3);
         assert.equal(filters[0].count, 1);
     });
 
-    it("has no duplicates filter when there are none", () => {
+    it("offers only the concepts chosen on the GIS server, in the server's order, once any are chosen", async () => {
+        const OTHER = {uuid: "other-uuid", name: "Something else", datatype: Concept.dataType.Coded, answers: []};
+        const withOccupancy = [...subjects, subject("z", "0009", {[OCCUPANCY.uuid]: YES})];
+        const mapFilters = [{concept_uuid: OCCUPANCY.uuid, concept_name: OCCUPANCY.name}, {concept_uuid: TOILET.uuid, concept_name: TOILET.name}];
+        const {filters} = await buildFilterCatalog({concepts: [TOILET, OTHER, OCCUPANCY], subjects: withOccupancy, conceptService, statusMap, mapFilters});
+        assert.deepEqual(filters.filter(f => f.kind === "concept").map(f => f.key), [OCCUPANCY.uuid, TOILET.uuid]);
+    });
+
+    it("matches a chosen concept by name when the server has no uuid for it", async () => {
+        const {filters} = await buildFilterCatalog({concepts: [OCCUPANCY, TOILET], subjects, conceptService, statusMap,
+            mapFilters: [{concept_uuid: "", concept_name: " do you have a toilet at home? "}]});
+        assert.deepEqual(filters.filter(f => f.kind === "concept").map(f => f.key), [TOILET.uuid]);
+    });
+
+    it("has no duplicates filter when there are none", async () => {
         const one = [subjects[0]];
-        const filters = buildFilterCatalog({concepts: [TOILET], subjects: one, conceptService, statusMap: buildStatusMap(one)});
+        const {filters} = await buildFilterCatalog({concepts: [TOILET], subjects: one, conceptService, statusMap: buildStatusMap(one)});
         assert.deepEqual(filters.map(f => f.key), [TOILET.uuid]);
     });
 
-    it("hides answer filters from users whose groups may not view the subject type", () => {
-        const filters = buildFilterCatalog({concepts: [TOILET], subjects, conceptService, statusMap, canViewAnswers: false});
+    it("hides answer filters from users whose groups may not view the subject type", async () => {
+        const {filters} = await buildFilterCatalog({concepts: [TOILET], subjects, conceptService, statusMap, canViewAnswers: false});
         assert.deepEqual(filters.map(f => f.key), [DUPLICATES_FILTER_KEY]);
     });
 });
@@ -88,16 +102,57 @@ describe("codedConceptsOnForm", () => {
     });
 });
 
+describe("answers given in visits", () => {
+    const VISIT_Q = {uuid: "visit-uuid", name: "Toilet in use?", datatype: Concept.dataType.Coded, answers: []};
+    const visited = {...subject("v", "0007"), encounters: [{voided: false, encounterDateTime: new Date("2026-02-01"),
+        observations: [{concept: VISIT_Q, getValueWrapper: () => ({getValue: () => YES})}]}]};
+
+    it("count towards the filter catalogue and colour the structure", async () => {
+        const all = [...subjects, visited];
+        const {filters} = await buildFilterCatalog({concepts: [VISIT_Q], subjects: all, conceptService, statusMap: buildStatusMap(all)});
+        assert.deepEqual(filters.filter(f => f.kind === "concept").map(f => [f.key, f.count]), [[VISIT_Q.uuid, 1]]);
+        assert.deepEqual(applyConceptFilter({table: await answerTable(all, [VISIT_Q]), concept: VISIT_Q, conceptService}).answerByKey, {"7": "Yes"});
+    });
+});
+
+describe("answerTable", () => {
+    it("holds each household's raw answers per concept, read in chunks, yielding between them", async () => {
+        const all = [...subjects, subject("z", "0009", {[OCCUPANCY.uuid]: YES})];
+        let ticks = 0;
+        const table = await answerTable(all, [TOILET, OCCUPANCY], {chunk: 2, yieldFn: () => { ticks++; return Promise.resolve(); }});
+        assert.equal(table.length, all.length);
+        assert.deepEqual(table[0], {key: "1", values: {[TOILET.uuid]: NO}});
+        assert.deepEqual(_.last(table).values, {[OCCUPANCY.uuid]: YES});
+        assert.equal(ticks, Math.ceil(all.length / 2) - 1);
+    });
+});
+
+describe("codedConceptsOnForms", () => {
+    const form = (...concepts) => ({getFormElementsOfType: () => concepts.map(concept => ({concept}))});
+    it("unions the coded concepts of every form, keeping each concept once in first-seen order", () => {
+        const concepts = codedConceptsOnForms([form(TOILET, OCCUPANCY), null, form(OCCUPANCY, {uuid: "x", name: "X"})]);
+        assert.deepEqual(concepts.map(c => c.uuid), [TOILET.uuid, OCCUPANCY.uuid, "x"]);
+    });
+});
+
 describe("applyConceptFilter", () => {
-    it("maps each structure to its answer and colours answers in concept order", () => {
-        const {answerByKey, answerColors} = applyConceptFilter({subjects, concept: TOILET, conceptService});
+    it("maps each structure to its answer and colours answers in concept order", async () => {
+        const table = await answerTable(subjects, [TOILET]);
+        const {answerByKey, answerColors} = applyConceptFilter({table, concept: TOILET, conceptService});
         assert.deepEqual(answerByKey, {"1": "No", "2": "Yes"});
         assert.deepEqual(answerColors, {Yes: ANSWER_PALETTE[0], No: ANSWER_PALETTE[1]});
     });
 
-    it("leaves structures without an answer out of the map", () => {
-        const {answerByKey} = applyConceptFilter({subjects, concept: TOILET, conceptService});
+    it("leaves structures without an answer out of the map", async () => {
+        const {answerByKey} = applyConceptFilter({table: await answerTable(subjects, [TOILET]), concept: TOILET, conceptService});
         assert.notProperty(answerByKey, "3");
+    });
+
+    it("colours answers the GIS server has a filter for in the website's colour", async () => {
+        const filterStyles = [{name: "Has toilet", concepts: [TOILET.name], answers: ["yes"], polycolor: "#00AA00", linecolor: null}];
+        const table = await answerTable(subjects, [TOILET]);
+        const {answerColors} = applyFilter({kind: "concept", concept: TOILET}, {table, conceptService, statusMap: {}, filterStyles});
+        assert.deepEqual(answerColors, {Yes: "#00AA00", No: ANSWER_PALETTE[0]});
     });
 });
 
@@ -109,9 +164,10 @@ describe("applyDuplicateFilter", () => {
         assert.deepEqual(_.keys(answerColors), ["2 registrations", "3 registrations"]);
     });
 
-    it("dispatches by filter kind", () => {
+    it("dispatches by filter kind", async () => {
         const statusMap = buildStatusMap(subjects);
-        assert.deepEqual(applyFilter({kind: "duplicates"}, {subjects, conceptService, statusMap}).answerByKey, {"2": "2 registrations"});
-        assert.deepEqual(applyFilter({kind: "concept", concept: TOILET}, {subjects, conceptService, statusMap}).answerByKey, {"1": "No", "2": "Yes"});
+        const table = await answerTable(subjects, [TOILET]);
+        assert.deepEqual(applyFilter({kind: "duplicates"}, {table, conceptService, statusMap}).answerByKey, {"2": "2 registrations"});
+        assert.deepEqual(applyFilter({kind: "concept", concept: TOILET}, {table, conceptService, statusMap}).answerByKey, {"1": "No", "2": "Yes"});
     });
 });

@@ -1,6 +1,7 @@
 import RNFS from 'react-native-fs';
 import General from '../utility/General';
 import GisConfig from '../gis/GisConfig';
+import {keepsMoreMapData} from '../gis/gisFile';
 import GisMappingQueue from '../gis/GisMappingQueue';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
@@ -53,9 +54,14 @@ class GisSyncService {
                 return false; // keep whatever was downloaded last time
             }
             const text = await response.text();
-            JSON.parse(text); // make sure it is valid JSON before replacing the saved copy
+            const next = JSON.parse(text);
+            const previous = (await RNFS.exists(destPath)) ? JSON.parse(await RNFS.readFile(destPath, 'utf8')) : null;
+            if (!keepsMoreMapData(previous, next)) {
+                General.logWarn('GisSyncService', `GIS for ${slumName} came back with less data than saved; keeping the saved copy`);
+                return false;
+            }
             await RNFS.writeFile(destPath, text, 'utf8');
-            General.logInfo('GisSyncService', `GIS saved for ${slumName} at ${destPath}`);
+            General.logInfo('GisSyncService', `GIS saved for ${slumName}: ${(next.features || []).length} structures, boundary ${next.boundary ? 'yes' : 'no'}`);
             return true;
         } catch (e) {
             General.logWarn('GisSyncService', `GIS download failed for ${slumName}: ${e.message}`);

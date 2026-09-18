@@ -1,26 +1,56 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput, ScrollView, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
-import * as turf from '@turf/turf';
+import DropDownPicker from 'react-native-dropdown-picker';
+import AppHeader from './common/AppHeader';
+import AvniIcon from './common/AvniIcon';
+import Colors from './primitives/Colors';
 import RNFS from 'react-native-fs';
 import _ from 'lodash';
-import { SubjectType } from 'avni-models';
+import { Form, SubjectType } from 'avni-models';
 import AbstractComponent from '../framework/view/AbstractComponent';
 import Path from '../framework/routing/Path';
 import TypedTransition from '../framework/routing/TypedTransition';
 import General from '../utility/General';
+import Perf from '../utility/perf';
 import IndividualService from '../service/IndividualService';
 import ConceptService from '../service/ConceptService';
 import EntityService from '../service/EntityService';
 import FormMappingService from '../service/FormMappingService';
 import PrivilegeService from '../service/PrivilegeService';
+import ProgramService from '../service/program/ProgramService';
+import EncounterTypeService from '../service/EncounterTypeService';
+import EntityQueueService from '../service/EntityQueueService';
+import EntitySyncStatusService from '../service/EntitySyncStatusService';
 import { structureKey, STRUCTURE_KEY_SOURCE } from '../gis/structureNumber';
-import { STATUS_COLORS, ANSWER_STYLE, statusLegend, answerLegend } from '../gis/colorCoding';
+import { STATUS_COLORS, ANSWER_STYLE, BOUNDARY_STYLE, DUPLICATE_STRIPES, statusLegend, answerLegend } from '../gis/colorCoding';
+import { hasStructures, mapCenter } from '../gis/mapCenter';
+import { householdSummary } from '../gis/householdSummary';
 import {
-    STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForm,
+    STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForms,
 } from '../gis/mapData';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
+const STATUS_FILTER = '__status__';
+const TOGGLABLE_STATUSES = ['notSurveyed', 'registered', 'duplicate'];  // selected/search are interaction states
+
+// Filter lists per slum for this session, keyed by what they were built from.
+const filterCatalogs = {};
+
+// Parsed slum files for this session, keyed by path and invalidated when sync rewrites the file.
+const slumFiles = {};
+async function readSlumFile(path) {
+    const t0 = Date.now();
+    const { mtime } = await RNFS.stat(path);
+    const cached = slumFiles[path];
+    if (cached && String(cached.mtime) === String(mtime)) return cached.data;
+    const text = await RNFS.readFile(path, 'utf8');
+    const data = Perf.time('map.parseGeojson', () => JSON.parse(text), {bytes: text.length});
+    Perf.mark('map.readGeojson', {ms: Date.now() - t0});
+    Object.keys(slumFiles).forEach(key => delete slumFiles[key]);  // one slum in memory is enough on small phones
+    slumFiles[path] = { mtime, data };
+    return data;
+}
 
 // Satellite map of one slum's building footprints. The worker taps the house
 // they are at; the structure number (or the already-registered household)
@@ -41,12 +71,17 @@ class MapPickerScreen extends AbstractComponent {
             ? params.slums
             : [{ uuid: params.avniUuid, name: params.slumName }];
         const current = slums.find(s => s.uuid === params.avniUuid) || slums[0];
+        this.openedAt = params.openedAt || Date.now();
         this.state = {
             slums,
             avniUuid: current.uuid,
             slumName: current.name,
             subjectTypeName: params.subjectTypeName,
+            browse: params.mode === 'browse',
             slumPickerOpen: false,
+            filterOpen: false,
+            showLabels: false,
+            notice: null,            // one-line warning shown under the header
             duplicatePickerOpen: false,
             geojson: null,
             center: null,
@@ -54,11 +89,15 @@ class MapPickerScreen extends AbstractComponent {
             filterLoading: false,
             selected: null,          // structure number tapped on the map
             selectedEntry: null,     // statusMap entry for it, or null when nobody is registered there
+            household: null,         // householdSummary of the single household registered there
             statusMap: {},           // structureKey -> {status, uuids, count}
             filters: [],             // what the filter bar offers for this slum/user (mapData.buildFilterCatalog)
+            table: [],               // each household's raw answers, so filters apply without touching Realm
             activeFilter: null,
             answerByKey: {},         // structureKey -> answer label for the active filter
             answerColors: {},        // answer label -> colour; the legend is rendered from this
+            hiddenAnswers: [],       // legend rows unticked for the active filter
+            hiddenStatuses: [],      // legend rows unticked in the survey-status view
             searchText: '',
         };
         this.webViewRef = React.createRef();
@@ -69,8 +108,8 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     componentDidMount() {
+        Perf.mark('map.mounted', {sinceOpen: Date.now() - this.openedAt});
         this.loadLocalGeoJson();
-        this.loadSlumData();
     }
 
     // House numbers are only unique within a slum, so everything is built from the households of
@@ -85,27 +124,63 @@ class MapPickerScreen extends AbstractComponent {
     // Status map + the filters that make sense here: coded questions of this subject type's
     // registration form that at least one household in this slum answered, shown only when the
     // user's groups may view the subject type; plus a duplicates filter when any exist.
+    // Registration, enrolment and visit forms the user may see for this subject type: their coded questions are the filters.
+    viewableForms(subjectType) {
+        const formMappingService = this.context.getService(FormMappingService);
+        const programs = this.context.getService(ProgramService).getAllowedViewPrograms([subjectType]);
+        const encounterTypes = this.context.getService(EncounterTypeService).getAllowedViewEncounterTypes([subjectType], programs);
+        return {
+            registration: formMappingService.findRegistrationForm(subjectType),
+            others: [
+                ...programs.map(program => formMappingService.findFormForProgramEnrolment(program, subjectType)),
+                ...encounterTypes.map(encounterType => formMappingService.findFormForEncounterType(encounterType,
+                    formMappingService.findProgramUUIDForEncounterType(encounterType, subjectType) ? Form.formTypes.ProgramEncounter : Form.formTypes.Encounter, subjectType)),
+            ],
+        };
+    }
+
+    // The map needs only the status map; the filter list is heavier and fills in once the map is on screen.
     loadSlumData() {
         try {
-            const subjects = this.subjectsInCurrentSlum();
-            const statusMap = buildStatusMap(subjects);
-            const { subjectTypeName } = this.state;
+            const subjects = Perf.time('map.subjects', () => this.subjectsInCurrentSlum());
+            const statusMap = Perf.time('map.statusMap', () => buildStatusMap(subjects), {subjects: subjects.length});
+            this.setState({ statusMap, loading: false }, () => setTimeout(() => this.loadFilters(subjects, statusMap), 0));
+        } catch (e) {
+            General.logError('MapPickerScreen', e);
+            this.setState({ statusMap: {}, filters: [], loading: false });
+        }
+    }
+
+    async loadFilters(subjects, statusMap) {
+        const { avniUuid, subjectTypeName } = this.state;
+        // Local edits grow the upload queue and a sync moves the last-loaded time, so either change rebuilds the list.
+        const cacheKey = [avniUuid, subjectTypeName, subjects.length, this.context.getService(EntityQueueService).getTotalQueueCount(),
+            this.context.getService(EntitySyncStatusService).getLastLoaded()].join('|');
+        if (filterCatalogs[cacheKey]) {
+            this.setState(filterCatalogs[cacheKey]);
+            return;
+        }
+        try {
+            const t0 = Date.now();
             const subjectType = subjectTypeName
                 ? this.context.getService(EntityService).findByKey('name', subjectTypeName, SubjectType.schema.name)
                 : null;
-            const form = subjectType ? this.context.getService(FormMappingService).findRegistrationForm(subjectType) : null;
             const canViewAnswers = subjectType ? canViewSubjectType(this.context.getService(PrivilegeService), subjectType) : false;
-            const filters = buildFilterCatalog({
-                concepts: codedConceptsOnForm(form),
+            const forms = subjectType ? this.viewableForms(subjectType) : { registration: null, others: [] };
+            const registrationConcepts = codedConceptsOnForms([forms.registration]);
+            const catalog = await buildFilterCatalog({
+                concepts: codedConceptsOnForms([forms.registration, ...forms.others]),
+                registrationConcepts,
                 subjects,
-                conceptService: this.context.getService(ConceptService),
                 statusMap,
                 canViewAnswers,
+                mapFilters: _.get(this.state.geojson, 'map_filters', []),
             });
-            this.setState({ statusMap, filters });
+            Perf.mark('map.filterCatalog', {ms: Date.now() - t0, filters: catalog.filters.length});
+            filterCatalogs[cacheKey] = catalog;
+            if (this.state.avniUuid === avniUuid) this.setState(catalog);
         } catch (e) {
             General.logError('MapPickerScreen', e);
-            this.setState({ statusMap: {}, filters: [] });
         }
     }
 
@@ -124,16 +199,16 @@ class MapPickerScreen extends AbstractComponent {
             center: null,
             selected: null,
             selectedEntry: null,
+            household: null,
             searchText: '',
             statusMap: {},
             filters: [],
+            table: [],
+            hiddenStatuses: [],
             activeFilter: null,
             answerByKey: {},
             answerColors: {},
-        }, () => {
-            this.loadLocalGeoJson();
-            this.loadSlumData();
-        });
+        }, () => this.loadLocalGeoJson());
     }
 
     selectFilter(filter) {
@@ -145,11 +220,12 @@ class MapPickerScreen extends AbstractComponent {
         // Let the loading overlay paint before walking every household.
         setTimeout(() => {
             try {
-                const { answerByKey, answerColors } = applyFilter(filter, {
-                    subjects: this.subjectsInCurrentSlum(),
+                const { answerByKey, answerColors } = Perf.time('map.applyFilter', () => applyFilter(filter, {
+                    table: this.state.table,
                     conceptService: this.context.getService(ConceptService),
                     statusMap: this.state.statusMap,
-                });
+                    filterStyles: _.get(this.state.geojson, 'filters', []),
+                }));
                 this.pushFilter(filter.key, answerByKey, answerColors);
             } catch (e) {
                 General.logError('MapPickerScreen', e);
@@ -158,12 +234,21 @@ class MapPickerScreen extends AbstractComponent {
         }, 50);
     }
 
-    pushFilter(activeFilter, answerByKey, answerColors) {
-        this.setState({ activeFilter, answerByKey, answerColors, filterLoading: false }, () => {
-            if (this.webViewRef.current) {
-                this.webViewRef.current.postMessage(JSON.stringify({ type: 'updateFilter', answerByKey, answerColors }));
-            }
+    pushFilter(activeFilter, answerByKey, answerColors, hiddenAnswers = []) {
+        this.setState({ activeFilter, answerByKey, answerColors, hiddenAnswers, filterLoading: false }, () => {
+            this.post({ type: 'updateFilter', answerByKey, answerColors, hiddenAnswers });
         });
+    }
+
+    toggleLegendRow(key) {
+        const { activeFilter, answerByKey, answerColors, hiddenAnswers, hiddenStatuses } = this.state;
+        if (activeFilter) {
+            this.pushFilter(activeFilter, answerByKey, answerColors, _.xor(hiddenAnswers, [key]));
+        } else {
+            const next = _.xor(hiddenStatuses, [key]);
+            this.setState({ hiddenStatuses: next });
+            this.post({ type: 'hideStatuses', hiddenStatuses: next });
+        }
     }
 
     async loadLocalGeoJson() {
@@ -176,21 +261,29 @@ class MapPickerScreen extends AbstractComponent {
             }
             const path = `${GIS_DIR}/structures_${avniUuid}.json`;
             if (!(await RNFS.exists(path))) {
-                alert(`No map data for ${this.state.slumName}. Please sync first.`);
-                if (this.state.slums.length > 1) {
-                    this.setState({ loading: false, slumPickerOpen: true });
-                } else {
-                    this.goBack();
-                }
+                this.noMapData(`No map data for ${this.state.slumName}. Please sync first.`);
                 return;
             }
-            const data = JSON.parse(await RNFS.readFile(path, 'utf8'));
-            const bbox = turf.bbox(data);
-            const center = { lat: (bbox[1] + bbox[3]) / 2, lng: (bbox[0] + bbox[2]) / 2 };
-            this.setState({ geojson: data, center, loading: false });
+            const data = await readSlumFile(path);
+            const center = mapCenter(data);
+            if (!center) {
+                this.noMapData(`Neither structures nor the boundary are available for ${this.state.slumName} yet.`);
+                return;
+            }
+            const notice = hasStructures(data) ? null : `Structures are not available for ${this.state.slumName} yet. Only the slum boundary is shown.`;
+            this.setState({ geojson: data, center, notice }, () => this.loadSlumData());
         } catch (e) {
             alert('Error loading map: ' + e.message);
             this.setState({ loading: false });
+        }
+    }
+
+    noMapData(message) {
+        alert(message);
+        if (this.state.slums.length > 1) {
+            this.setState({ loading: false, slumPickerOpen: true });
+        } else {
+            this.goBack();
         }
     }
 
@@ -199,14 +292,18 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     // existingUuid: the household to open (chosen from the duplicate list when there are several).
+    // A household opens on top of the map so Back returns here; a registration replaces the map.
     handleConfirm(existingUuid) {
         const { selected, selectedEntry, avniUuid } = this.state;
+        const CHSNavigator = require('../utility/CHSNavigator').default;
         const uuid = existingUuid || (selectedEntry ? selectedEntry.uuids[0] : null);
+        if (uuid) {
+            this.setState({ duplicatePickerOpen: false });
+            CHSNavigator.navigateToIndividualRegistrationDetails(this, uuid, null);
+            return;
+        }
         TypedTransition.from(this).goBack();
-        setTimeout(() => {
-            const CHSNavigator = require('../utility/CHSNavigator').default;
-            CHSNavigator.invokeMapPickerCallback(selected, uuid, avniUuid);
-        }, 300);
+        setTimeout(() => CHSNavigator.invokeMapPickerCallback(selected, null, avniUuid), 300);
     }
 
     onConfirmPressed() {
@@ -218,22 +315,47 @@ class MapPickerScreen extends AbstractComponent {
         }
     }
 
+    post(message) {
+        if (this.webViewRef.current) this.webViewRef.current.postMessage(JSON.stringify(message));
+    }
+
+    toggleLabels() {
+        const showLabels = !this.state.showLabels;
+        this.setState({ showLabels });
+        this.post({ type: 'showLabels', show: showLabels });
+    }
+
+    clearSelection() {
+        this.setState({ selected: null, selectedEntry: null, household: null });
+        this.post({ type: 'clearSelection' });
+    }
+
+    summarise(entry) {
+        if (!entry || entry.count !== 1) return null;
+        const individual = this.context.getService(IndividualService).findByUUID(entry.uuids[0]);
+        const concepts = this.state.filters.filter(f => f.kind === 'concept').map(f => f.concept);
+        return individual ? householdSummary(individual, concepts, this.context.getService(ConceptService)) : null;
+    }
+
     handleSearch() {
         const key = structureKey(this.state.searchText);
         if (!key) return;
-        if (this.webViewRef.current) {
-            this.webViewRef.current.postMessage(JSON.stringify({ type: 'searchStructure', key }));
-        }
+        this.post({ type: 'searchStructure', key });
     }
 
     onWebViewMessage(event) {
         try {
             const data = JSON.parse(event.nativeEvent.data);
             if (data.type === 'structureSelected') {
-                this.setState({
-                    selected: data.structureId,
-                    selectedEntry: this.state.statusMap[structureKey(data.structureId)] || null,
-                });
+                const selectedEntry = this.state.statusMap[structureKey(data.structureId)] || null;
+                this.setState({ selected: data.structureId, selectedEntry, household: this.summarise(selectedEntry) });
+            } else if (data.type === 'ready') {
+                Perf.mark('map.pageReady', {sinceOpen: Date.now() - this.openedAt});
+            } else if (data.type === 'tilesUnavailable') {
+                if (!this.state.notice) this.setState({ notice: 'No internet: satellite imagery is unavailable, structures are still shown.' });
+            } else if (data.type === 'loadError') {
+                General.logError('MapPickerScreen', new Error(`map page could not load structures: ${data.message}`));
+                alert(`Could not draw the structures of ${this.state.slumName}. Please sync and try again.`);
             } else if (data.type === 'searchNotFound') {
                 alert('Structure not found on map');
             }
@@ -242,17 +364,28 @@ class MapPickerScreen extends AbstractComponent {
         }
     }
 
+    // Built once per slum load; filter changes reach the page by message, a new source would reload Leaflet.
+    mapHTML() {
+        const { geojson, statusMap } = this.state;
+        if (!this.html || this.html.geojson !== geojson || this.html.statusMap !== statusMap) {
+            this.html = { geojson, statusMap, text: this.buildMapHTML() };
+        }
+        return this.html.text;
+    }
+
     buildMapHTML() {
-        const { geojson, center, statusMap, answerByKey, answerColors } = this.state;
+        const { geojson, center, statusMap, avniUuid } = this.state;
+        const geojsonUrl = `file://${GIS_DIR}/structures_${avniUuid}.json`;
         return `<!DOCTYPE html>
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="leaflet/leaflet.css" onerror="this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'"/>
+    <script src="leaflet/leaflet.js"></script>
     <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         html, body, #map { width:100%; height:100%; }
+        .leaflet-container { background:#2b2b2b; }
         .structure-label {
             background:transparent!important; border:none!important;
             box-shadow:none!important; font-size:9px; font-weight:bold;
@@ -264,20 +397,63 @@ class MapPickerScreen extends AbstractComponent {
 <body>
 <div id="map"></div>
 <script>
+function main() {
     // All colours come from src/gis/colorCoding.js — nothing is hardcoded here.
     var STATUS_COLORS = ${JSON.stringify(STATUS_COLORS)};
     var ANSWER_STYLE = ${JSON.stringify(ANSWER_STYLE)};
     var statusMap = ${JSON.stringify(statusMap)};
-    var answerByKey = ${JSON.stringify(answerByKey)};
-    var answerColors = ${JSON.stringify(answerColors)};
-    var filterActive = Object.keys(answerByKey).length > 0;
+    var answerByKey = {};
+    var answerColors = {};
+    var hiddenAnswers = {};   // legend rows the worker unticked under a filter
+    var hiddenStatuses = {};  // ...and in the survey-status view
+    var filterActive = false;
 
     var map = L.map('map').setView([${center.lat}, ${center.lng}], 17);
-    L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+
+    // Duplicates are drawn with a striped fill: an SVG <pattern> in the renderer, used through fillColor.
+    var renderer = L.svg().addTo(map);
+    var STRIPE_COLORS = ${JSON.stringify(DUPLICATE_STRIPES)};
+    (function addStripes() {
+        var svgNS = 'http://www.w3.org/2000/svg';
+        var defs = document.createElementNS(svgNS, 'defs');
+        var pattern = document.createElementNS(svgNS, 'pattern');
+        pattern.setAttribute('id', 'duplicateStripes');
+        pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+        pattern.setAttribute('patternTransform', 'rotate(45)');
+        pattern.setAttribute('width', String(4 * STRIPE_COLORS.length));
+        pattern.setAttribute('height', '8');
+        STRIPE_COLORS.forEach(function(color, i) {
+            var rect = document.createElementNS(svgNS, 'rect');
+            rect.setAttribute('x', String(4 * i)); rect.setAttribute('y', '0');
+            rect.setAttribute('width', '4'); rect.setAttribute('height', '8');
+            rect.setAttribute('fill', color);
+            pattern.appendChild(rect);
+        });
+        defs.appendChild(pattern);
+        renderer._container.appendChild(defs);
+    })();
+    var tiles = L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
         attribution:'Google Satellite', maxZoom:22
     }).addTo(map);
+    var tilesFailed = false;
+    tiles.on('tileerror', function() {  // offline: imagery is missing but the structures still draw
+        if (tilesFailed) return;
+        tilesFailed = true;
+        window.ReactNativeWebView.postMessage(JSON.stringify({type:'tilesUnavailable'}));
+    });
+    tiles.on('load', function() { tilesFailed = false; });
 
-    var geojson = ${JSON.stringify(geojson)};
+    var boundary = ${JSON.stringify(geojson.boundary || null)};
+    if (boundary) {
+        var BOUNDARY_STYLE = ${JSON.stringify(BOUNDARY_STYLE)};
+        var boundaryLayer = L.geoJSON(boundary, {
+            interactive: false,
+            style: {color: BOUNDARY_STYLE.stroke, weight: BOUNDARY_STYLE.weight, dashArray: BOUNDARY_STYLE.dashArray, fill: false}
+        }).addTo(map);
+        map.fitBounds(boundaryLayer.getBounds(), {padding: [12, 12], maxZoom: 19});
+    }
+
+    var geojson = null;  // loaded from the slum file below; keeps the file out of the RN bridge and heap
     var selectedLayer = null;
     var layerIndex = {};
     var labelLayers = [];
@@ -286,7 +462,13 @@ class MapPickerScreen extends AbstractComponent {
     ${STRUCTURE_KEY_SOURCE}
 
     function statusStyle(entry) {
-        return {fillColor: entry.fill, fillOpacity: entry.fillOpacity, color: entry.stroke, weight: entry.weight};
+        var fill = entry === STATUS_COLORS.duplicate ? 'url(#duplicateStripes)' : entry.fill;
+        return {fillColor: fill, fillOpacity: entry.fillOpacity, color: entry.stroke, weight: entry.weight};
+    }
+
+    function statusOf(key) {
+        var entry = statusMap[key];
+        return !entry ? 'notSurveyed' : entry.status === '${STATUS.duplicate}' ? 'duplicate' : 'registered';
     }
 
     function getStyle(structureId, isSelected, isSearch) {
@@ -295,44 +477,79 @@ class MapPickerScreen extends AbstractComponent {
         if (isSelected) return statusStyle(STATUS_COLORS.selected);
         if (filterActive) {
             var answer = answerByKey[key];
-            if (answer && answerColors[answer]) {
+            if (answer && answerColors[answer] && !hiddenAnswers[answer]) {
                 return {fillColor: answerColors[answer], fillOpacity: ANSWER_STYLE.fillOpacity, color: ANSWER_STYLE.stroke, weight: ANSWER_STYLE.weight};
             }
             return statusStyle(statusMap[key] ? STATUS_COLORS.noData : STATUS_COLORS.filteredOut);
         }
-        var entry = statusMap[key];
-        if (entry && entry.status === '${STATUS.duplicate}') return statusStyle(STATUS_COLORS.duplicate);
-        if (entry) return statusStyle(STATUS_COLORS.registered);
-        return statusStyle(STATUS_COLORS.notSurveyed);
+        var status = statusOf(key);
+        if (hiddenStatuses[status]) return statusStyle(STATUS_COLORS.filteredOut);
+        return statusStyle(STATUS_COLORS[status]);
     }
 
-    L.geoJSON(geojson, {
-        style: function(f) { return getStyle(f.properties.s, false, false); },
-        onEachFeature: function(feature, layer) {
-            var sid = String(feature.properties.s).trim();
-            layerIndex[structureKey(sid)] = layer;
-            layer.on('click', function() {
-                if (selectedLayer) {
-                    selectedLayer.setStyle(getStyle(selectedLayer.feature.properties.s, false, false));
-                }
-                layer.setStyle(getStyle(sid, true, false));
-                layer.bringToFront();
-                selectedLayer = layer;
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                    type:'structureSelected', structureId:feature.properties.s
-                }));
-            });
-        }
-    }).addTo(map);
+    // Canvas draws thousands of footprints cheaply; only the striped duplicates need the SVG renderer.
+    var canvas = L.canvas();
+    function isDuplicate(feature) {
+        var entry = statusMap[structureKey(feature.properties.s)];
+        return !!entry && entry.status === '${STATUS.duplicate}';
+    }
+    function addStructures(data) {
+        geojson = data;
+        L.geoJSON(geojson, {
+            renderer: canvas,
+            filter: function(f) { return !isDuplicate(f); },
+            style: function(f) { return getStyle(f.properties.s, false, false); },
+            onEachFeature: onEachStructure
+        }).addTo(map);
+        L.geoJSON(geojson, {
+            renderer: renderer,
+            filter: isDuplicate,
+            style: function(f) { return getStyle(f.properties.s, false, false); },
+            onEachFeature: onEachStructure
+        }).addTo(map);
+        if (filterActive) refreshAll();
+        updateLabels();
+        window.ReactNativeWebView.postMessage(JSON.stringify({type:'ready'}));
+    }
 
+    var request = new XMLHttpRequest();
+    request.open('GET', ${JSON.stringify(geojsonUrl)});
+    request.onload = function() {
+        try { addStructures(JSON.parse(request.responseText)); }
+        catch (e) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'loadError', message: String(e)})); }
+    };
+    request.onerror = function() { window.ReactNativeWebView.postMessage(JSON.stringify({type:'loadError', message: 'cannot read slum file'})); };
+    request.send();
+
+    function onEachStructure(feature, layer) {
+        var sid = String(feature.properties.s).trim();
+        layerIndex[structureKey(sid)] = layer;
+        layer.on('click', function() {
+            if (selectedLayer) {
+                selectedLayer.setStyle(getStyle(selectedLayer.feature.properties.s, false, false));
+            }
+            layer.setStyle(getStyle(sid, true, false));
+            layer.bringToFront();
+            selectedLayer = layer;
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type:'structureSelected', structureId:feature.properties.s
+            }));
+        });
+    }
+
+    var showLabels = false;
     function updateLabels() {
         labelLayers.forEach(function(l){ map.removeLayer(l); });
         labelLayers = [];
-        if (map.getZoom() < 18) return;
+        if (!showLabels || !geojson) return;
+        var view = map.getBounds();
         geojson.features.forEach(function(feature) {
-            var coords = feature.geometry.coordinates[0];
-            var latlngs = coords.map(function(c){ return [c[1],c[0]]; });
-            var c = L.polygon(latlngs).getBounds().getCenter();
+            var key = structureKey(String(feature.properties.s).trim());
+            var layer = layerIndex[key];
+            if (!layer) return;
+            if (filterActive ? (!answerByKey[key] || hiddenAnswers[answerByKey[key]]) : hiddenStatuses[statusOf(key)]) return;
+            var c = layer.getBounds().getCenter();
+            if (!view.contains(c)) return;
             var lbl = L.marker(c, {
                 icon: L.divIcon({
                     className:'structure-label',
@@ -345,10 +562,17 @@ class MapPickerScreen extends AbstractComponent {
             labelLayers.push(lbl);
         });
     }
-    map.on('zoomend', updateLabels);
-    updateLabels();
+
+    map.on('moveend', updateLabels);
+
+    function clearSelection() {
+        if (!selectedLayer) return;
+        selectedLayer.setStyle(getStyle(selectedLayer.feature.properties.s, false, false));
+        selectedLayer = null;
+    }
 
     function refreshAll() {
+        if (!geojson) return;
         geojson.features.forEach(function(feature) {
             var sid = String(feature.properties.s).trim();
             var layer = layerIndex[structureKey(sid)];
@@ -379,16 +603,42 @@ class MapPickerScreen extends AbstractComponent {
                     window.ReactNativeWebView.postMessage(JSON.stringify({type:'searchNotFound'}));
                 }
             }
+            if (data.type === 'showLabels') {
+                showLabels = data.show;
+                updateLabels();
+            }
+            if (data.type === 'clearSelection') clearSelection();
+            if (data.type === 'hideStatuses') {
+                hiddenStatuses = {};
+                data.hiddenStatuses.forEach(function(status) { hiddenStatuses[status] = true; });
+                refreshAll();
+                updateLabels();
+            }
             if (data.type === 'updateFilter') {
                 answerByKey = data.answerByKey;
                 answerColors = data.answerColors;
+                hiddenAnswers = {};
+                (data.hiddenAnswers || []).forEach(function(label) { hiddenAnswers[label] = true; });
                 filterActive = Object.keys(answerByKey).length > 0;
                 refreshAll();
+                updateLabels();
             }
         } catch(err) {}
     }
     document.addEventListener('message', handleMessage);
     window.addEventListener('message', handleMessage);
+}
+
+// Leaflet ships in the APK; an APK without it falls back to the CDN, and with no network at all RN is told.
+if (window.L) {
+    main();
+} else {
+    var leaflet = document.createElement('script');
+    leaflet.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    leaflet.onload = main;
+    leaflet.onerror = function() { window.ReactNativeWebView.postMessage(JSON.stringify({type:'loadError', message:'Leaflet is not available'})); };
+    document.head.appendChild(leaflet);
+}
 </script>
 </body>
 </html>`;
@@ -415,16 +665,6 @@ class MapPickerScreen extends AbstractComponent {
         );
     }
 
-    renderSlumPicker() {
-        const { slums, slumPickerOpen, avniUuid } = this.state;
-        return this.renderPicker({
-            visible: slumPickerOpen,
-            title: 'Choose a slum',
-            onClose: () => this.setState({ slumPickerOpen: false }),
-            rows: slums.map(slum => ({ key: slum.uuid, label: slum.name, active: slum.uuid === avniUuid, onPress: () => this.switchSlum(slum) })),
-        });
-    }
-
     // Several households are registered on the tapped structure: let the worker choose which to open.
     renderDuplicatePicker() {
         const { duplicatePickerOpen, selectedEntry, selected } = this.state;
@@ -448,18 +688,35 @@ class MapPickerScreen extends AbstractComponent {
         });
     }
 
-    renderFilterBar() {
-        const { filters, activeFilter } = this.state;
-        const chip = (key, label, onPress, active) => (
-            <TouchableOpacity key={key} style={[styles.filterChip, active && styles.filterChipActive]} onPress={onPress}>
-                <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>{label}</Text>
-            </TouchableOpacity>
+    renderControls() {
+        const { slums, avniUuid, slumPickerOpen, filters, activeFilter, filterOpen } = this.state;
+        const filterItems = [{ label: 'Survey status', value: STATUS_FILTER }, ...filters.map(f => ({ label: `${f.label} (${f.count})`, value: f.key }))];
+        const dropdown = (props) => (
+            <DropDownPicker
+                listMode="SCROLLVIEW" setValue={_.noop} arrowIconStyle={styles.dropdownArrow}
+                style={styles.dropdown} textStyle={styles.dropdownText} dropDownContainerStyle={styles.dropdownList}
+                {...props}
+            />
         );
         return (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} contentContainerStyle={styles.filterContent}>
-                {chip('__status__', 'Survey Status', () => this.selectFilter(null), !activeFilter)}
-                {filters.map(filter => chip(filter.key, `${filter.label} (${filter.count})`, () => this.selectFilter(filter), activeFilter === filter.key))}
-            </ScrollView>
+            <View style={styles.controls}>
+                {slums.length > 1 && (
+                    <View style={styles.control}>
+                        {dropdown({
+                            items: slums.map(slum => ({ label: slum.name, value: slum.uuid })), value: avniUuid, open: slumPickerOpen,
+                            setOpen: open => this.setState({ slumPickerOpen: open, filterOpen: false }),
+                            onSelectItem: item => this.switchSlum(_.find(slums, { uuid: item.value })), zIndex: 3000, zIndexInverse: 1000,
+                        })}
+                    </View>
+                )}
+                <View style={styles.control}>
+                    {dropdown({
+                        items: filterItems, value: activeFilter || STATUS_FILTER, open: filterOpen, searchable: filterItems.length > 8,
+                        setOpen: open => this.setState({ filterOpen: open, slumPickerOpen: false }),
+                        onSelectItem: item => this.selectFilter(_.find(filters, { key: item.value }) || null), zIndex: 2000, zIndexInverse: 2000,
+                    })}
+                </View>
+            </View>
         );
     }
 
@@ -471,32 +728,75 @@ class MapPickerScreen extends AbstractComponent {
             : statusLegend({ includeDuplicate: _.some(statusMap, entry => entry.status === STATUS.duplicate) });
         return (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.legendScroll} contentContainerStyle={styles.legendContent}>
-                {rows.map(row => (
-                    <View key={row.key} style={styles.legendItem}>
-                        <View style={[styles.legendDot, { backgroundColor: row.color }]} />
-                        <Text style={styles.legendText}>{row.label}</Text>
-                    </View>
-                ))}
+                <TouchableOpacity style={styles.legendItem} onPress={() => this.toggleLabels()}>
+                    <AvniIcon name={this.state.showLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
+                    <Text style={styles.legendText}>House numbers</Text>
+                </TouchableOpacity>
+                <View style={styles.legendDivider} />
+                {rows.map(row => {
+                    const toggles = activeFilter ? row.key !== 'noData' : _.includes(TOGGLABLE_STATUSES, row.key);
+                    const hidden = toggles && _.includes(activeFilter ? this.state.hiddenAnswers : this.state.hiddenStatuses, row.key);
+                    return (
+                        <TouchableOpacity key={row.key} style={styles.legendItem} disabled={!toggles} onPress={() => this.toggleLegendRow(row.key)}>
+                            <View style={[styles.swatch, hidden && styles.swatchHidden]}>
+                                <View style={[StyleSheet.absoluteFill, styles.swatchFill, !row.stripes && { backgroundColor: row.color }]}>
+                                    {row.stripes && row.stripes.map((c, i) => <View key={i} style={{ flex: 1, backgroundColor: c }} />)}
+                                </View>
+                                {toggles && !hidden && <AvniIcon name="check" type="MaterialIcons" style={styles.swatchTick} />}
+                            </View>
+                            <Text style={[styles.legendText, hidden && styles.legendTextHidden]}>{row.label}</Text>
+                        </TouchableOpacity>
+                    );
+                })}
             </ScrollView>
         );
     }
 
+    renderHouseholdCard() {
+        const { household } = this.state;
+        if (!household) return null;
+        return (
+            <View style={styles.householdCard}>
+                <View style={styles.panelHeader}>
+                    <Text style={styles.householdName}>{household.name || 'Household'} · #{household.number}</Text>
+                    {this.renderClose()}
+                </View>
+                {household.registeredOn && <Text style={styles.householdMeta}>Registered {household.registeredOn}</Text>}
+                {household.answers.slice(0, 4).map(({ label, value }, i) => (
+                    <Text key={label} style={i === 0 ? styles.householdHeadline : styles.householdAnswer} numberOfLines={1}>
+                        {label}: <Text style={styles.householdValue}>{value}</Text>
+                    </Text>
+                ))}
+            </View>
+        );
+    }
+
+    renderClose() {
+        return (
+            <TouchableOpacity onPress={() => this.clearSelection()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <AvniIcon name="close" type="MaterialIcons" style={styles.closeIcon} />
+            </TouchableOpacity>
+        );
+    }
+
     renderBottomBar() {
-        const { selected, selectedEntry } = this.state;
+        const { selected, selectedEntry, browse } = this.state;
         if (!selected) {
             return (
                 <View style={styles.hintBar}>
-                    <Text style={styles.hintText}>Tap a structure on the map to select it</Text>
+                    <Text style={styles.hintText}>Tap a structure on the map to {browse ? 'see who lives there' : 'select it'}</Text>
                 </View>
             );
         }
         const isDuplicate = selectedEntry && selectedEntry.count > 1;
         const label = isDuplicate ? `${selectedEntry.count} households registered here`
-            : selectedEntry ? 'Already registered' : 'Selected structure';
-        const button = isDuplicate ? 'View households →' : selectedEntry ? 'View household →' : 'Use this →';
+            : selectedEntry ? 'Already registered' : browse ? 'Nobody registered here' : 'Selected structure';
+        const button = isDuplicate ? 'View households' : selectedEntry ? 'View household' : browse ? 'Register here' : 'Use this';
+        const icon = selectedEntry ? 'open-in-new' : 'add';
         return (
             <View style={styles.confirmBar}>
-                <View>
+                {!this.state.household && this.renderClose()}
+                <View style={styles.confirmInfo}>
                     <Text style={styles.confirmLabel}>{label}</Text>
                     <Text style={styles.confirmId}>#{selected}</Text>
                 </View>
@@ -504,19 +804,19 @@ class MapPickerScreen extends AbstractComponent {
                     style={[styles.confirmBtn, selectedEntry && styles.confirmBtnExisting, isDuplicate && styles.confirmBtnDuplicate]}
                     onPress={() => this.onConfirmPressed()}>
                     <Text style={styles.confirmBtnText}>{button}</Text>
+                    <AvniIcon name={icon} type="MaterialIcons" style={styles.confirmBtnIcon} />
                 </TouchableOpacity>
             </View>
         );
     }
 
     render() {
-        const { loading, filterLoading, geojson, center, searchText, slumName, slums } = this.state;
-        const canSwitchSlum = slums.length > 1;
+        const { loading, filterLoading, geojson, center, searchText, slumName, notice } = this.state;
 
         if (loading) {
             return (
                 <View style={styles.centered}>
-                    <ActivityIndicator size="large" color="#1D9E75" />
+                    <ActivityIndicator size="large" color={Colors.AccentColor} />
                     <Text style={styles.loadingText}>Loading map...</Text>
                 </View>
             );
@@ -524,38 +824,36 @@ class MapPickerScreen extends AbstractComponent {
 
         return (
             <View style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={() => this.goBack()}>
-                        <Text style={styles.backBtn}>← Back</Text>
+                <AppHeader title={slumName || 'Slum map'} func={() => this.goBack()} hideIcon={true} />
+                {notice && (
+                    <TouchableOpacity style={styles.notice} onPress={() => this.setState({ notice: null })}>
+                        <Text style={styles.noticeText}>{notice}</Text>
+                        <AvniIcon name="close" type="MaterialIcons" style={styles.noticeClose} />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.headerTitleTouch} disabled={!canSwitchSlum}
-                        onPress={() => this.setState({ slumPickerOpen: true })}>
-                        <Text style={styles.headerTitle} numberOfLines={1}>
-                            {slumName || 'Select Structure'}{canSwitchSlum ? '  ▾' : ''}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
+                )}
 
-                {this.renderSlumPicker()}
                 {this.renderDuplicatePicker()}
 
                 <View style={styles.searchBar}>
+                    <AvniIcon name="search" type="MaterialIcons" style={styles.searchIcon} />
                     <TextInput
                         style={styles.searchInput}
                         placeholder="Search structure no. (e.g. 1 or 0001)"
-                        placeholderTextColor="#999"
+                        placeholderTextColor={Colors.SecondaryText}
                         value={searchText}
                         onChangeText={(text) => this.setState({ searchText: text })}
                         keyboardType="numeric"
                         returnKeyType="search"
                         onSubmitEditing={() => this.handleSearch()}
                     />
-                    <TouchableOpacity style={styles.searchBtn} onPress={() => this.handleSearch()}>
-                        <Text style={styles.searchBtnText}>🔍</Text>
-                    </TouchableOpacity>
+                    {!!searchText && (
+                        <TouchableOpacity onPress={() => this.setState({ searchText: '' })}>
+                            <AvniIcon name="close" type="MaterialIcons" style={styles.searchIcon} />
+                        </TouchableOpacity>
+                    )}
                 </View>
 
-                {this.renderFilterBar()}
+                {this.renderControls()}
                 {this.renderLegend()}
 
                 <View style={styles.mapContainer}>
@@ -563,23 +861,27 @@ class MapPickerScreen extends AbstractComponent {
                         <WebView
                             ref={this.webViewRef}
                             style={styles.map}
-                            source={{ html: this.buildMapHTML() }}
+                            source={{ html: this.mapHTML(), baseUrl: 'file:///android_asset/' }}
                             onMessage={(event) => this.onWebViewMessage(event)}
                             javaScriptEnabled={true}
                             domStorageEnabled={true}
+                            allowFileAccess={true}
+                            allowFileAccessFromFileURLs={true}
+                            allowUniversalAccessFromFileURLs={true}
                             originWhitelist={['*']}
                         />
                     )}
                     {filterLoading && (
                         <View style={styles.filterLoadingOverlay}>
                             <View style={styles.filterLoadingBox}>
-                                <ActivityIndicator size="large" color="#1D9E75" />
+                                <ActivityIndicator size="large" color={Colors.AccentColor} />
                                 <Text style={styles.filterLoadingText}>Applying filter...</Text>
                             </View>
                         </View>
                     )}
                 </View>
 
+                {this.renderHouseholdCard()}
                 {this.renderBottomBar()}
             </View>
         );
@@ -587,138 +889,63 @@ class MapPickerScreen extends AbstractComponent {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000' },
+    container: { flex: 1, backgroundColor: Colors.cardBackgroundColor },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    loadingText: { marginTop: 12, fontSize: 16, color: '#555' },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#1D9E75',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        paddingTop: 40,
-        gap: 12,
-    },
-    backBtn: { color: '#fff', fontSize: 16 },
-    headerTitle: { color: '#fff', fontSize: 16, fontWeight: '500' },
-    searchBar: {
-        flexDirection: 'row',
-        backgroundColor: '#fff',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-        alignItems: 'center',
-        gap: 8,
-    },
-    searchInput: {
-        flex: 1,
-        height: 36,
-        backgroundColor: '#f4f4f4',
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        fontSize: 14,
-        color: '#333',
-    },
-    searchBtn: {
-        backgroundColor: '#1D9E75',
-        borderRadius: 8,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-    },
-    searchBtnText: { fontSize: 16 },
-    filterScroll: {
-        backgroundColor: '#f0f0f0',
-        borderBottomWidth: 1,
-        borderBottomColor: '#ddd',
-        maxHeight: 44,
-    },
-    filterContent: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        gap: 6,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    filterChip: {
-        paddingHorizontal: 12,
-        paddingVertical: 5,
-        borderRadius: 16,
-        backgroundColor: '#ddd',
-        marginRight: 6,
-    },
-    filterChipActive: { backgroundColor: '#1D9E75' },
-    filterChipText: { fontSize: 12, color: '#444' },
-    filterChipTextActive: { color: '#fff', fontWeight: '500' },
-    legendScroll: {
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
-        maxHeight: 34,
-    },
-    legendContent: {
-        flexDirection: 'row',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        gap: 12,
-        alignItems: 'center',
-    },
+    loadingText: { marginTop: 12, fontSize: 16, color: Colors.DetailsTextColor },
+    notice: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF8E1', paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
+    noticeText: { flex: 1, fontSize: 13, color: Colors.DefaultPrimaryColor },
+    noticeClose: { fontSize: 18, color: Colors.SecondaryText },
+    searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal },
+    searchIcon: { fontSize: 22, color: Colors.SecondaryText },
+    searchInput: { flex: 1, height: 36, fontSize: 14, color: Colors.DefaultPrimaryColor },
+    controls: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.cardBackgroundColor, zIndex: 3000 },
+    control: { flex: 1 },
+    dropdown: { minHeight: 36, borderColor: Colors.InputBorderNormal, borderRadius: 4, backgroundColor: Colors.cardBackgroundColor },
+    dropdownText: { fontSize: 13, color: Colors.DefaultPrimaryColor },
+    dropdownList: { borderColor: Colors.InputBorderNormal, backgroundColor: Colors.cardBackgroundColor, elevation: 8 },
+    dropdownArrow: { tintColor: Colors.DefaultPrimaryColor },
+    legendScroll: { backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, maxHeight: 34 },
+    legendContent: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, gap: 12, alignItems: 'center' },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    legendDot: { width: 12, height: 12, borderRadius: 3 },
-    legendText: { fontSize: 11, color: '#444' },
-    mapContainer: { flex: 1, position: 'relative' },
+    swatch: { width: 18, height: 18, borderRadius: 3, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+    swatchFill: { flexDirection: 'row' },
+    swatchHidden: { opacity: 0.3 },
+    swatchTick: { fontSize: 15, color: Colors.TextOnPrimaryColor, textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 2 },
+    legendText: { fontSize: 11, color: Colors.DetailsTextColor },
+    legendTextHidden: { color: Colors.SecondaryText, textDecorationLine: 'line-through' },
+    legendDivider: { width: 1, height: 16, backgroundColor: Colors.InputBorderNormal },
+    checkbox: { fontSize: 18, color: Colors.AccentColor },
+    panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    closeIcon: { fontSize: 22, color: Colors.SecondaryText },
+    confirmInfo: { flex: 1, marginLeft: 12 },
+    mapContainer: { flex: 1, backgroundColor: Colors.BlackBackground },
     map: { flex: 1 },
-    filterLoadingOverlay: {
-        position: 'absolute',
-        top: 0, left: 0, right: 0, bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.45)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    filterLoadingBox: {
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        padding: 24,
-        alignItems: 'center',
-        gap: 12,
-    },
-    filterLoadingText: { fontSize: 15, color: '#333', marginTop: 8 },
-    confirmBar: {
-        backgroundColor: '#fff',
-        padding: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderTopWidth: 1,
-        borderTopColor: '#e0e0e0',
-    },
-    confirmLabel: { fontSize: 12, color: '#888' },
-    confirmId: { fontSize: 18, fontWeight: '500', color: '#1D9E75' },
-    confirmBtn: {
-        backgroundColor: '#1D9E75',
-        paddingHorizontal: 20,
-        paddingVertical: 10,
-        borderRadius: 8,
-    },
+    filterLoadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
+    filterLoadingBox: { backgroundColor: Colors.cardBackgroundColor, borderRadius: 12, padding: 24, alignItems: 'center', gap: 12 },
+    filterLoadingText: { fontSize: 15, color: Colors.DefaultPrimaryColor, marginTop: 8 },
+    householdCard: { backgroundColor: Colors.cardBackgroundColor, borderTopWidth: 1, borderColor: Colors.InputBorderNormal, paddingHorizontal: 16, paddingVertical: 8 },
+    householdName: { fontSize: 15, fontWeight: '500', color: Colors.DefaultPrimaryColor },
+    householdMeta: { fontSize: 12, color: Colors.SecondaryText, marginBottom: 2 },
+    householdHeadline: { fontSize: 14, color: Colors.DefaultPrimaryColor, marginBottom: 2 },
+    householdAnswer: { fontSize: 13, color: Colors.DetailsTextColor },
+    householdValue: { color: Colors.DefaultPrimaryColor, fontWeight: '500' },
+    confirmBar: { backgroundColor: Colors.cardBackgroundColor, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: Colors.InputBorderNormal },
+    confirmLabel: { fontSize: 12, color: Colors.SecondaryText },
+    confirmId: { fontSize: 18, fontWeight: '500', color: Colors.AccentColor },
+    confirmBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.ActionButtonColor, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 4, elevation: 2 },
     confirmBtnExisting: { backgroundColor: STATUS_COLORS.registered.fill },
     confirmBtnDuplicate: { backgroundColor: STATUS_COLORS.duplicate.fill },
-    confirmBtnText: { color: '#fff', fontWeight: '500', fontSize: 15 },
-    hintBar: {
-        backgroundColor: '#fff',
-        padding: 16,
-        alignItems: 'center',
-        borderTopWidth: 1,
-        borderTopColor: '#e0e0e0',
-    },
-    hintText: { color: '#888', fontSize: 14 },
+    confirmBtnText: { color: Colors.TextOnPrimaryColor, fontWeight: '500', fontSize: 15 },
+    confirmBtnIcon: { color: Colors.TextOnPrimaryColor, fontSize: 18 },
+    hintBar: { backgroundColor: Colors.cardBackgroundColor, padding: 16, alignItems: 'center', borderTopWidth: 1, borderTopColor: Colors.InputBorderNormal },
+    hintText: { color: Colors.SecondaryText, fontSize: 14 },
     pickerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
-    pickerSheet: { backgroundColor: '#fff', borderRadius: 8, maxHeight: '70%', paddingVertical: 8 },
-    pickerTitle: { fontSize: 16, fontWeight: '600', color: '#333', paddingHorizontal: 16, paddingVertical: 8 },
-    pickerRow: { paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#eee' },
-    pickerText: { fontSize: 16, color: '#333' },
-    pickerTextActive: { color: '#1D9E75', fontWeight: '600' },
-    pickerSubText: { fontSize: 12, color: '#888', marginTop: 2 },
-    headerTitleTouch: { flex: 1 },
+    pickerSheet: { backgroundColor: Colors.cardBackgroundColor, borderRadius: 8, maxHeight: '70%', paddingVertical: 8 },
+    pickerTitle: { fontSize: 16, fontWeight: '600', color: Colors.DefaultPrimaryColor, paddingHorizontal: 16, paddingVertical: 8 },
+    pickerRow: { paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: Colors.InputBorderNormal },
+    pickerText: { fontSize: 16, color: Colors.DefaultPrimaryColor },
+    pickerTextActive: { color: Colors.AccentColor, fontWeight: '600' },
+    pickerSubText: { fontSize: 12, color: Colors.SecondaryText, marginTop: 2 },
 });
 
 export default MapPickerScreen;

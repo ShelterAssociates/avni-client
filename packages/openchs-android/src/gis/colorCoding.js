@@ -20,29 +20,45 @@ export const STATUS_COLORS = {
     filteredOut: {fill: "#bbbbbb", stroke: "#888888", fillOpacity: 0.15, weight: 1, label: "Not surveyed"},
 };
 
-// Answer colours for the concept filters, assigned in the order answers are
-// listed (see assignAnswerColors) and wrapping round past the end.
+// Answer colours for the concept filters: 16 colours that stay distinguishable
+// side by side on satellite imagery; a question with more answers wraps round.
 export const ANSWER_PALETTE = [
-    "#E74C3C", "#3498DB", "#2ECC71", "#F39C12", "#9B59B6", "#1ABC9C",
-    "#E67E22", "#C0392B", "#2980B9", "#27AE60", "#D35400", "#8E44AD",
+    "#E74C3C", "#3498DB", "#2ECC71", "#F39C12", "#9B59B6", "#1ABC9C", "#E67E22", "#34495E",
+    "#F1C40F", "#E91E63", "#00BCD4", "#8BC34A", "#795548", "#FF5722", "#3F51B5", "#607D8B",
 ];
 
 // Answer polygons share one outline so the fill colour carries the meaning.
 export const ANSWER_STYLE = {stroke: "#333333", fillOpacity: 0.75, weight: 1};
 
-// {answerLabel: colour} for the given labels, first label gets the first
-// palette colour, and so on round the palette. Duplicate labels keep their
-// first colour.
-export function assignAnswerColors(labels) {
+// Slum boundary: an unfilled dashed outline that stays visible over satellite imagery.
+export const BOUNDARY_STYLE = {stroke: "#FFD400", weight: 3, dashArray: "8 6"};
+
+// {answerLabel: colour} for the given labels. An answer the GIS metadata
+// colours (presetColors, see filterColors.js) keeps the website's colour;
+// the rest take palette colours in order. No two answers of one question share
+// a colour until every palette colour is in use.
+export function assignAnswerColors(labels, presetColors = {}) {
     const colors = {};
+    const used = new Set();
+    const isUsed = color => used.has(_.toLower(color));
+    const take = color => { used.add(_.toLower(color)); return color; };
+    const presetByLabel = _.mapKeys(presetColors, (color, label) => _.toLower(_.trim(label)));
     let next = 0;
     _.forEach(labels, label => {
         if (_.isNil(label) || _.has(colors, label)) return;
-        colors[label] = ANSWER_PALETTE[next % ANSWER_PALETTE.length];
-        next++;
+        const preset = presetByLabel[_.toLower(_.trim(label))];
+        if (preset && !isUsed(preset)) {
+            colors[label] = take(preset);
+            return;
+        }
+        const free = _.find(ANSWER_PALETTE, color => !isUsed(color));
+        colors[label] = free ? take(free) : ANSWER_PALETTE[next++ % ANSWER_PALETTE.length];
     });
     return colors;
 }
+
+// Structures with more than one household registered: stripes in these colours.
+export const DUPLICATE_STRIPES = ["#d7263d", "#ffffff", "#f39c12"];
 
 // Labels in a stable, meaningful order: the concept's own answer order
 // first (so "Yes" is always the same colour across sessions and slums), then
@@ -55,7 +71,7 @@ export function orderAnswerLabels(discoveredLabels, conceptAnswerNames = []) {
 
 export function statusLegend({includeDuplicate = true} = {}) {
     const keys = ["notSurveyed", "registered", ...(includeDuplicate ? ["duplicate"] : []), "selected", "searchHit"];
-    return keys.map(key => ({key, label: STATUS_COLORS[key].label, color: STATUS_COLORS[key].fill}));
+    return keys.map(key => ({key, label: STATUS_COLORS[key].label, color: STATUS_COLORS[key].fill, ...(key === "duplicate" && {stripes: DUPLICATE_STRIPES})}));
 }
 
 // Legend for an active filter, derived from the exact colour map the map is

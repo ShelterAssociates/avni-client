@@ -1,7 +1,7 @@
 import _ from "lodash";
 import {assert} from "chai";
 import {
-    ANSWER_PALETTE, STATUS_COLORS, assignAnswerColors, orderAnswerLabels, statusLegend, answerLegend, duplicateLabel,
+    ANSWER_PALETTE, DUPLICATE_STRIPES, STATUS_COLORS, assignAnswerColors, orderAnswerLabels, statusLegend, answerLegend, duplicateLabel,
 } from "../../src/gis/colorCoding";
 
 describe("assignAnswerColors", () => {
@@ -27,6 +27,26 @@ describe("assignAnswerColors", () => {
     it("is empty for no answers", () => {
         assert.deepEqual(assignAnswerColors([]), {});
     });
+
+    it("has at least 15 distinct colours", () => {
+        assert.isAtLeast(ANSWER_PALETTE.length, 15);
+        assert.equal(_.uniq(ANSWER_PALETTE.map(c => c.toLowerCase())).length, ANSWER_PALETTE.length);
+    });
+
+    it("uses the website's colour for an answer the GIS metadata covers and the palette for the rest", () => {
+        const colors = assignAnswerColors(["Own toilet", "Shared toilet", "Open"], {"Own toilet": "#00AA00"});
+        assert.equal(colors["Own toilet"], "#00AA00");
+        assert.equal(colors["Shared toilet"], ANSWER_PALETTE[0]);
+        assert.equal(colors["Open"], ANSWER_PALETTE[1]);
+    });
+
+    it("never gives two answers of one question the same colour while the palette lasts", () => {
+        const colors = assignAnswerColors(["A", "B", "C"], {A: ANSWER_PALETTE[0], C: ANSWER_PALETTE[0]});
+        assert.equal(colors.A, ANSWER_PALETTE[0]);
+        assert.equal(colors.B, ANSWER_PALETTE[1]);
+        assert.equal(colors.C, ANSWER_PALETTE[2]);  // its preset clashes with A, so it takes the next free colour
+        assert.equal(_.uniq(_.values(colors)).length, 3);
+    });
 });
 
 describe("orderAnswerLabels", () => {
@@ -49,6 +69,12 @@ describe("legends", () => {
         const legend = statusLegend();
         assert.deepEqual(legend.map(row => row.key), ["notSurveyed", "registered", "duplicate", "selected", "searchHit"]);
         legend.forEach(row => assert.equal(row.color, STATUS_COLORS[row.key].fill));
+    });
+
+    it("draws the duplicate row with the same stripes as the map", () => {
+        const duplicate = _.find(statusLegend(), {key: "duplicate"});
+        assert.deepEqual(duplicate.stripes, DUPLICATE_STRIPES);
+        assert.notProperty(_.find(statusLegend(), {key: "registered"}), "stripes");
     });
 
     it("answer legend is derived from the colour map plus the no-data row", () => {
