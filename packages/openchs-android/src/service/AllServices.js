@@ -55,6 +55,7 @@ import './EntityService';
 import './EntitySyncStatusService';
 import './FamilyService';
 import './FormMappingService';
+import './GisSyncService';
 import './GroupSubjectService';
 import './IdentifierAssignmentService';
 import './IndividualService';

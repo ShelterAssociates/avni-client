@@ -23,6 +23,8 @@ import ErrorUtil from "../framework/errorHandling/ErrorUtil";
 import {IgnorableSyncError} from "openchs-models";
 import IssueUploadUtil from "../utility/IssueUploadUtil";
 import {getConnectionInfo} from "../utility/ConnectionInfo";
+import GisSyncService from "../service/GisSyncService";
+import AddressLevelService from "../service/AddressLevelService";
 
 class SyncComponent extends AbstractComponent {
     unsubscribe;
@@ -216,6 +218,9 @@ class SyncComponent extends AbstractComponent {
             // The OK button is surfaced explicitly, once the whole sync has resolved —
             // independent of the progress bar reaching 100%.
             if (syncSucceeded) {
+                // Shelter Associates GIS: download building polygons for the synced slums so the
+                // map picker works offline. Errors are logged inside the service, never surfaced here.
+                await GisSyncService.syncGisData(this.context.getService(AddressLevelService));
                 this.dispatchAction(SyncActions.SET_SHOW_OK_BUTTON, {show: true});
             }
         } else {
