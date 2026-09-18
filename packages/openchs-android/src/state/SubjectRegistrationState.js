@@ -100,6 +100,7 @@ class SubjectRegistrationState extends AbstractDataEntryState {
         newState.saveDrafts = this.saveDrafts;
         newState.groupAffiliation = this.groupAffiliation;
         newState.group = this.group;
+        newState.structureId = this.structureId;
         super.clone(newState);
         return newState;
     }

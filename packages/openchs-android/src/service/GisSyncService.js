@@ -1,7 +1,8 @@
 import RNFS from 'react-native-fs';
 import General from '../utility/General';
 
-const GIS_SERVER = 'http://localhost:8000';
+// TODO(phase 2): move to config/env. 'localhost' on a device means the phone itself (adb reverse tcp:8000).
+export const GIS_SERVER_URL = 'http://localhost:8000';
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
 class GisSyncService {
@@ -23,7 +24,7 @@ class GisSyncService {
     }
 
     static async downloadStructuresForSlum(avniUuid, slumName) {
-        const url = `${GIS_SERVER}/component/get_structures_for_avni/?avni_uuid=${avniUuid}&slum_name=${encodeURIComponent(slumName)}`;
+        const url = `${GIS_SERVER_URL}/component/get_structures_for_avni/?avni_uuid=${avniUuid}&slum_name=${encodeURIComponent(slumName)}`;
         const destPath = `${GIS_DIR}/structures_${avniUuid}.json`;
 
         General.logInfo('GisSyncService', `Downloading GIS for slum: ${slumName}`);

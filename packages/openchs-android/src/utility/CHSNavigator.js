@@ -209,7 +209,7 @@ class CHSNavigator {
         }).to(GenericDashboardView);
     }
 
-    static navigateToRegisterView(source, {workLists, groupSubjectUUID, taskUuid}, pageNumber, canMoveToNextView) {
+    static navigateToRegisterView(source, {workLists, groupSubjectUUID, taskUuid, structureId}, pageNumber, canMoveToNextView) {
         const workItem = workLists.getCurrentWorkItem();
         const uuid = workItem.parameters.uuid;
         const subjectTypeName = workItem.parameters.subjectTypeName;
@@ -221,6 +221,7 @@ class CHSNavigator {
             taskUuid,
             editing: !_.isNil(uuid),
             workLists,
+            structureId,
         };
         if (subjectType.isPerson()) {
             if (PersonRegisterView.canLoad({uuid, subjectTypeName}, source)) {
