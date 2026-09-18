@@ -44,4 +44,18 @@ describe("structureKey", () => {
         ["0035", "22A", " 7 ", "R1", null].forEach(v => assert.equal(inWebView(v), structureKey(v)));
         assert.match(STRUCTURE_KEY_SOURCE, /^function structureKey\(/);
     });
+
+    it("does not depend on Function.prototype.toString, which Hermes cannot provide", () => {
+        const original = Function.prototype.toString;
+        Function.prototype.toString = function () { return `function ${this.name}() { [bytecode] }`; };
+        let hermesModule;
+        try {
+            jest.isolateModules(() => { hermesModule = require("../../src/gis/structureNumber"); });
+        } finally {
+            Function.prototype.toString = original;
+        }
+        const inWebView = new Function(`${hermesModule.STRUCTURE_KEY_SOURCE}; return structureKey;`)();
+        assert.equal(inWebView("0035"), "35");
+        assert.equal(inWebView("0022 A"), "22A");
+    });
 });
