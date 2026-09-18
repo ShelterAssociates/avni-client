@@ -1,13 +1,16 @@
 import RNFS from 'react-native-fs';
 import General from '../utility/General';
+import GisConfig from '../gis/GisConfig';
 
-// TODO(phase 2): move to config/env. 'localhost' on a device means the phone itself (adb reverse tcp:8000).
-export const GIS_SERVER_URL = 'http://localhost:8000';
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
 class GisSyncService {
     static async syncGisData(addressLevelService) {
         try {
+            if (!GisConfig.isConfigured()) {
+                General.logWarn('GisSyncService', 'GIS_SERVER_URL / GIS_API_KEY not set in Config.js; skipping GIS sync');
+                return;
+            }
             General.logInfo('GisSyncService', 'Starting GIS sync');
             const dirExists = await RNFS.exists(GIS_DIR);
             if (!dirExists) await RNFS.mkdir(GIS_DIR);
@@ -24,12 +27,12 @@ class GisSyncService {
     }
 
     static async downloadStructuresForSlum(avniUuid, slumName) {
-        const url = `${GIS_SERVER_URL}/component/get_structures_for_avni/?avni_uuid=${avniUuid}&slum_name=${encodeURIComponent(slumName)}`;
+        const path = `/component/get_structures_for_avni/?avni_uuid=${avniUuid}`;
         const destPath = `${GIS_DIR}/structures_${avniUuid}.json`;
 
         General.logInfo('GisSyncService', `Downloading GIS for slum: ${slumName}`);
 
-        const response = await fetch(url);
+        const response = await GisConfig.fetch(path);
         if (!response.ok) {
             General.logWarn('GisSyncService', `GIS fetch failed for ${slumName}: HTTP ${response.status}`);
             return; // skip this slum, don't crash

@@ -23,7 +23,7 @@ import TimerActions from "../common/TimerActions";
 import TaskService from "../../service/task/TaskService";
 import General from '../../utility/General';
 import AddressLevelService from '../../service/AddressLevelService';
-import {GIS_SERVER_URL} from '../../service/GisSyncService';
+import GisConfig from '../../gis/GisConfig';
 import {dispatchHandleNext} from "../common/DispatchHelpers";
 
 export class SubjectRegisterActions {
@@ -188,8 +188,8 @@ export class SubjectRegisterActions {
     // Shelter Associates GIS: tell the GIS server which building footprint this household
     // belongs to. Non-blocking; a failure must not stop the registration from saving.
     static recordStructureMapping(subjectUuid, structureId) {
-        if (!structureId) return;
-        fetch(`${GIS_SERVER_URL}/component/map_subject_to_structure/`, {
+        if (!structureId || !GisConfig.isConfigured()) return;
+        GisConfig.fetch('/component/map_subject_to_structure/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({subject_uuid: subjectUuid, structure_id: structureId})

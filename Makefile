@@ -139,12 +139,22 @@ endif
 
 # <release>
 
+# Shelter Associates GIS map picker (src/gis). The server URL is per-environment
+# and the key is a secret, so neither lives in config/env/*.json: pass them as
+# make variables or environment variables, e.g.
+#   GIS_SERVER_URL=https://gis.example.org GIS_API_KEY=... make run_app_prod_dev
+# GIS_SERVER_URL defaults to the phone's own loopback, which reaches a Django
+# dev server on this machine after `adb reverse tcp:8000 tcp:8000`.
+GIS_SERVER_URL?=http://localhost:8000
+GIS_API_KEY?=
+gis_config:=GIS_SERVER_URL: '$(GIS_SERVER_URL)', GIS_API_KEY: '$(GIS_API_KEY)'
+
 define _create_config
 	@echo "Creating config for $1"
 	@if [ $(1) = "prod" ]; then \
-		echo "module.exports = Object.assign(require('../../config/env/$(1).json'), {COMMIT_ID: '$(sha)', SERVER_URL: '$(flavor_server_url)', DISABLE_APP_RUN_ON_ROOTED_DEVICES: $(flavor_disable_app_run_on_rooted_devices)});" > packages/openchs-android/src/framework/Config.js; \
+		echo "module.exports = Object.assign(require('../../config/env/$(1).json'), {COMMIT_ID: '$(sha)', SERVER_URL: '$(flavor_server_url)', DISABLE_APP_RUN_ON_ROOTED_DEVICES: $(flavor_disable_app_run_on_rooted_devices), $(gis_config)});" > packages/openchs-android/src/framework/Config.js; \
 	else \
-	 	echo "module.exports = Object.assign(require('../../config/env/$(1).json'), {COMMIT_ID: '$(sha)'});" > packages/openchs-android/src/framework/Config.js; \
+	 	echo "module.exports = Object.assign(require('../../config/env/$(1).json'), {COMMIT_ID: '$(sha)', $(gis_config)});" > packages/openchs-android/src/framework/Config.js; \
 	fi
 endef
 
