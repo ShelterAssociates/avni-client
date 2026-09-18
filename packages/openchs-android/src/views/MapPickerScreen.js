@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput, ScrollView, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as turf from '@turf/turf';
 import RNFS from 'react-native-fs';
@@ -38,7 +38,17 @@ class MapPickerScreen extends AbstractComponent {
 
     constructor(props, context) {
         super(props, context);
+        const params = props.params || props;
+        // Every Slum the worker has synced; the picker starts on params.avniUuid and can switch.
+        const slums = params.slums && params.slums.length > 0
+            ? params.slums
+            : [{ uuid: params.avniUuid, name: params.slumName }];
+        const current = slums.find(s => s.uuid === params.avniUuid) || slums[0];
         this.state = {
+            slums,
+            avniUuid: current.uuid,
+            slumName: current.name,
+            slumPickerOpen: false,
             geojson: null,
             selected: null,
             selectedExistingUuid: null,
@@ -67,9 +77,8 @@ class MapPickerScreen extends AbstractComponent {
     loadSurveyStatus() {
         try {
             const individualService = this.context.getService(IndividualService);
-            const allSubjects = individualService.findAll();
             const statusMap = {};
-            allSubjects.forEach(subject => {
+            this.subjectsInCurrentSlum(individualService).forEach(subject => {
                 const key = structureKey(subject.firstName);
                 if (key) statusMap[key] = { status: 'registered', uuid: subject.uuid };
             });
@@ -77,6 +86,38 @@ class MapPickerScreen extends AbstractComponent {
         } catch (e) {
             this.setState({ statusMap: {} });
         }
+    }
+
+    // House numbers are only unique within a slum, so status and filter maps must be built
+    // from the households registered in the slum being shown, not everything on the device.
+    subjectsInCurrentSlum(individualService) {
+        return individualService.findAllByCriteria(`voided = false AND lowestAddressLevel.uuid = "${this.state.avniUuid}"`);
+    }
+
+    switchSlum(slum) {
+        if (slum.uuid === this.state.avniUuid) {
+            this.setState({ slumPickerOpen: false });
+            return;
+        }
+        this.setState({
+            avniUuid: slum.uuid,
+            slumName: slum.name,
+            slumPickerOpen: false,
+            loading: true,
+            geojson: null,
+            center: null,
+            selected: null,
+            selectedExistingUuid: null,
+            searchText: '',
+            statusMap: {},
+            conceptMap: {},
+            conceptColors: {},
+            conceptLegend: [],
+            selectedConcept: null,
+        }, () => {
+            this.loadLocalGeoJson();
+            this.loadSurveyStatus();
+        });
     }
 
     loadConceptFilter(conceptName) {
@@ -87,7 +128,7 @@ class MapPickerScreen extends AbstractComponent {
             try {
                 const individualService = this.context.getService(IndividualService);
                 const conceptService = this.context.getService(ConceptService);
-                const allSubjects = individualService.findAll();
+                const allSubjects = this.subjectsInCurrentSlum(individualService);
 
                 const conceptMap = {};  // structureId -> answer text
                 const answerSet = {};   // answer text -> true
@@ -156,9 +197,7 @@ class MapPickerScreen extends AbstractComponent {
 
     async loadLocalGeoJson() {
         try {
-            const params = this.props.params || this.props;
-            const avniUuid = params.avniUuid;
-            const slumName = params.slumName;
+            const { avniUuid } = this.state;
 
             if (!avniUuid) {
                 alert('No slum UUID received. Cannot load map.');
@@ -169,8 +208,12 @@ class MapPickerScreen extends AbstractComponent {
             const path = `${GIS_DIR}/structures_${avniUuid}.json`;
             const exists = await RNFS.exists(path);
             if (!exists) {
-                alert('No map data found. Please sync first.');
-                this.goBack();
+                alert(`No map data for ${this.state.slumName}. Please sync first.`);
+                if (this.state.slums.length > 1) {
+                    this.setState({ loading: false, slumPickerOpen: true });
+                } else {
+                    this.goBack();
+                }
                 return;
             }
 
@@ -194,11 +237,11 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     handleConfirm() {
-        const { selected, selectedExistingUuid } = this.state;
+        const { selected, selectedExistingUuid, avniUuid } = this.state;
         TypedTransition.from(this).goBack();
         setTimeout(() => {
             const CHSNavigator = require('../utility/CHSNavigator').default;
-            CHSNavigator.invokeMapPickerCallback(selected, selectedExistingUuid);
+            CHSNavigator.invokeMapPickerCallback(selected, selectedExistingUuid, avniUuid);
         }, 300);
     }
 
@@ -386,6 +429,30 @@ class MapPickerScreen extends AbstractComponent {
 </html>`;
     }
 
+    renderSlumPicker() {
+        const { slums, slumPickerOpen, avniUuid } = this.state;
+        if (!slumPickerOpen) return null;
+        return (
+            <Modal transparent animationType="fade" onRequestClose={() => this.setState({ slumPickerOpen: false })}>
+                <TouchableOpacity style={styles.slumPickerBackdrop} activeOpacity={1}
+                    onPress={() => this.setState({ slumPickerOpen: false })}>
+                    <View style={styles.slumPickerSheet}>
+                        <Text style={styles.slumPickerTitle}>Choose a slum</Text>
+                        <ScrollView>
+                            {slums.map(slum => (
+                                <TouchableOpacity key={slum.uuid} style={styles.slumPickerRow} onPress={() => this.switchSlum(slum)}>
+                                    <Text style={[styles.slumPickerText, slum.uuid === avniUuid && styles.slumPickerTextActive]}>
+                                        {slum.name}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+        );
+    }
+
     renderFilterBar() {
         const { selectedConcept } = this.state;
         return (
@@ -458,9 +525,8 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     render() {
-        const { loading, filterLoading, selected, selectedExistingUuid, geojson, center, searchText } = this.state;
-        const params = this.props.params || this.props;
-        const slumName = params.slumName;
+        const { loading, filterLoading, selected, selectedExistingUuid, geojson, center, searchText, slumName, slums } = this.state;
+        const canSwitchSlum = slums.length > 1;
 
         if (loading) {
             return (
@@ -478,8 +544,17 @@ class MapPickerScreen extends AbstractComponent {
                     <TouchableOpacity onPress={() => this.goBack()}>
                         <Text style={styles.backBtn}>← Back</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>{slumName || 'Select Structure'}</Text>
+                    <TouchableOpacity
+                        style={styles.headerTitleTouch}
+                        disabled={!canSwitchSlum}
+                        onPress={() => this.setState({ slumPickerOpen: true })}>
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                            {slumName || 'Select Structure'}{canSwitchSlum ? '  ▾' : ''}
+                        </Text>
+                    </TouchableOpacity>
                 </View>
+
+                {this.renderSlumPicker()}
 
                 {/* Search bar */}
                 <View style={styles.searchBar}>
@@ -570,7 +645,14 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     backBtn: { color: '#fff', fontSize: 16 },
+    headerTitleTouch: { flex: 1 },
     headerTitle: { color: '#fff', fontSize: 16, fontWeight: '500' },
+    slumPickerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+    slumPickerSheet: { backgroundColor: '#fff', borderRadius: 8, maxHeight: '70%', paddingVertical: 8 },
+    slumPickerTitle: { fontSize: 16, fontWeight: '600', color: '#333', paddingHorizontal: 16, paddingVertical: 8 },
+    slumPickerRow: { paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#eee' },
+    slumPickerText: { fontSize: 16, color: '#333' },
+    slumPickerTextActive: { color: '#1D9E75', fontWeight: '600' },
     searchBar: {
         flexDirection: 'row',
         backgroundColor: '#fff',

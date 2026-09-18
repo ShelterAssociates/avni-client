@@ -711,16 +711,20 @@ class CHSNavigator {
         );
     }
 
-    static navigateToMapPicker(source, avniUuid, slumName, onStructurePicked) {
+    // slums: [{uuid, name}] the worker can switch between; the picker opens on initialSlumUuid.
+    // onStructurePicked(structureId, existingSubjectUuid, slumUuid) — slumUuid is the slum the
+    // structure was picked from, which may differ from initialSlumUuid.
+    static navigateToMapPicker(source, slums, initialSlumUuid, onStructurePicked) {
         const MapPickerScreen = require('../views/MapPickerScreen').default;
         _mapPickerCallback = onStructurePicked;
-        TypedTransition.from(source).with({avniUuid, slumName}).to(MapPickerScreen, true);
+        const initial = _.find(slums, {uuid: initialSlumUuid}) || _.head(slums);
+        TypedTransition.from(source).with({slums, avniUuid: initial.uuid, slumName: initial.name}).to(MapPickerScreen, true);
     }
 
-    static invokeMapPickerCallback(structureId, existingUuid) {
+    static invokeMapPickerCallback(structureId, existingUuid, slumUuid) {
         _pendingStructureId = structureId;
         if (_mapPickerCallback) {
-            _mapPickerCallback(structureId, existingUuid);
+            _mapPickerCallback(structureId, existingUuid, slumUuid);
             _mapPickerCallback = null;
         }
     }

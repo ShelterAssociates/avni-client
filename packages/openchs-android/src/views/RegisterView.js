@@ -110,17 +110,19 @@ class RegisterView extends AbstractComponent {
     // form opens directly, as upstream does. navigateToForm receives {structureId, slumUuid}
     // (the structure number and the Avni uuid of the slum whose map it was picked from) or null.
     _navigateViaMap(subjectType, navigateToForm) {
-        const allLevels = this.context.getService(AddressLevelService).findAll('AddressLevel');
-        const slum = [...allLevels].find(a => a.type === 'Slum' && !a.voided);
-        if (!slum) {
+        // Every synced Slum is one the worker is assigned to (sync is catchment-scoped).
+        const slums = _.sortBy(
+            this.context.getService(AddressLevelService).findAllByCriteria(`type = 'Slum' AND voided = false`).map(a => ({uuid: a.uuid, name: a.name})),
+            'name');
+        if (_.isEmpty(slums)) {
             navigateToForm(null);
             return;
         }
-        CHSNavigator.navigateToMapPicker(this, slum.uuid, slum.name, (structureId, existingUuid) => {
+        CHSNavigator.navigateToMapPicker(this, slums, slums[0].uuid, (structureId, existingUuid, slumUuid) => {
             if (existingUuid) {
                 CHSNavigator.navigateToIndividualRegistrationDetails(this, existingUuid, null);
             } else {
-                navigateToForm(structureId ? {structureId, slumUuid: slum.uuid} : null);
+                navigateToForm(structureId ? {structureId, slumUuid} : null);
             }
         });
     }
