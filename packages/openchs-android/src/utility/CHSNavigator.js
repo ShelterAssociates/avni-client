@@ -54,6 +54,12 @@ import CalendarService from "../service/CalendarService";
 import {ReportCard} from "avni-models";
 
 
+// Map picker hand-off. TypedTransition params are the natural place for a callback, but the
+// picker pops itself before reporting back, so the callback is held here until then and
+// cleared on first use.
+let _mapPickerCallback = null;
+let _pendingStructureId = null;
+
 class CHSNavigator {
     static navigateToLoginView(source, allowSkipLogin, backFunction) {
         TypedTransition.from(source).with({
@@ -702,6 +708,24 @@ class CHSNavigator {
             [SystemRecommendationView, ProgramEncounterView, ProgramEncounterCancelView, IndividualEncounterView],
             []
         );
+    }
+
+    static navigateToMapPicker(source, avniUuid, slumName, onStructurePicked) {
+        const MapPickerScreen = require('../views/MapPickerScreen').default;
+        _mapPickerCallback = onStructurePicked;
+        TypedTransition.from(source).with({avniUuid, slumName}).to(MapPickerScreen, true);
+    }
+
+    static invokeMapPickerCallback(structureId, existingUuid) {
+        _pendingStructureId = structureId;
+        if (_mapPickerCallback) {
+            _mapPickerCallback(structureId, existingUuid);
+            _mapPickerCallback = null;
+        }
+    }
+
+    static getPendingStructureId() {
+        return _pendingStructureId;
     }
 
     static proceedEncounter(typeorencounter, parent, onSaveCallback, source) {

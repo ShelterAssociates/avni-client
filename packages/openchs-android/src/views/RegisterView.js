@@ -16,6 +16,7 @@ import Fonts from "./primitives/Fonts";
 import FormMappingService from "../service/FormMappingService";
 import PrivilegeService from "../service/PrivilegeService";
 import GroupSubjectService from "../service/GroupSubjectService";
+import AddressLevelService from "../service/AddressLevelService";
 import UserInfoService from "../service/UserInfoService";
 import DraftSubjectService from "../service/draft/DraftSubjectService";
 import DraftConfigService from "../service/DraftConfigService";
@@ -52,9 +53,10 @@ class RegisterView extends AbstractComponent {
             return this._addHouseholdAction(subjectType);
         }
         return {
-            fn: () => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
                 {taskUuid: this.props.taskUuid,
-                    workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`)).withRegistration(subjectType.name))}),
+                    structureId,
+                    workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`)).withRegistration(subjectType.name))})),
             label: this.I18n.t(`${subjectType.name}`),
             backgroundColor: Colors.AccentColor,
         }
@@ -70,14 +72,15 @@ class RegisterView extends AbstractComponent {
         };
 
         return {
-            fn: () => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
                 {
                     taskUuid: this.props.taskUuid,
+                    structureId,
                     workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`))
                         .withRegistration(subjectType.name)
                         .withHouseholdRegistration(householdParams)
                     )
-                }),
+                })),
             label: this.I18n.t(`${subjectType.name}`),
             backgroundColor: Colors.AccentColor,
         }
@@ -85,13 +88,14 @@ class RegisterView extends AbstractComponent {
 
     _addProgramAction(subjectType, program) {
         return {
-            fn: () => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
                 {
+                    structureId,
                     workLists: new WorkLists(new WorkList(this.I18n.t(`REG_ENROL_DISPLAY-${program.programSubjectLabel}`))
                         .withRegistration(subjectType.name)
                         .withEnrolment(program.name)
                     )
-                }),
+                })),
             label: this.I18n.t(`REG_ENROL_DISPLAY-${program.programSubjectLabel}`),
             backgroundColor: program.colour,
         }
@@ -99,6 +103,25 @@ class RegisterView extends AbstractComponent {
 
     _addProgramActions(subjectType, programs) {
         return _.map(programs, program => this._addProgramAction(subjectType, program));
+    }
+
+    // Shelter Associates GIS: route registration through the map picker. An already-registered
+    // structure opens the existing household instead of a new form; with no Slum synced the
+    // form opens directly, as upstream does.
+    _navigateViaMap(subjectType, navigateToForm) {
+        const allLevels = this.context.getService(AddressLevelService).findAll('AddressLevel');
+        const slum = [...allLevels].find(a => a.type === 'Slum' && !a.voided);
+        if (!slum) {
+            navigateToForm(null);
+            return;
+        }
+        CHSNavigator.navigateToMapPicker(this, slum.uuid, slum.name, (structureId, existingUuid) => {
+            if (existingUuid) {
+                CHSNavigator.navigateToIndividualRegistrationDetails(this, existingUuid, null);
+            } else {
+                navigateToForm(structureId);
+            }
+        });
     }
 
     renderButton(onPress, buttonColor, text, textColor, index, subjectType, totalActions) {
