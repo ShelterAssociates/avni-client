@@ -23,7 +23,7 @@ import TimerActions from "../common/TimerActions";
 import TaskService from "../../service/task/TaskService";
 import General from '../../utility/General';
 import AddressLevelService from '../../service/AddressLevelService';
-import GisConfig from '../../gis/GisConfig';
+import GisMappingQueue from '../../gis/GisMappingQueue';
 import {dispatchHandleNext} from "../common/DispatchHelpers";
 
 export class SubjectRegisterActions {
@@ -42,8 +42,8 @@ export class SubjectRegisterActions {
             SubjectRegisterActions.getDraftSubject(action, context) :
             SubjectRegisterActions.getOrCreateSubject(isNewEntity, action, context);
         // Shelter Associates GIS: the structure number picked on the map is the household's name.
-        if (isNewEntity && action.structureId) {
-            subject.setFirstName(String(action.structureId));
+        if (isNewEntity && _.get(action, 'mapStructure.structureId')) {
+            subject.setFirstName(String(action.mapStructure.structureId));
         }
         const subjectType = subject.subjectType;
         const form = context.get(FormMappingService).findRegistrationForm(subjectType);
@@ -64,7 +64,7 @@ export class SubjectRegisterActions {
 
         if (_.isNil(firstGroupWithAtLeastOneVisibleElement)) {
             const emptyFormState = SubjectRegistrationState.createOnLoadForEmptyForm(subject, form, isNewEntity, action.workLists, minLevelTypeUUIDs, isSaveDraftOn, groupAffiliationState, group);
-            emptyFormState.structureId = action.structureId || null;
+            emptyFormState.mapStructure = action.mapStructure || null;
             return emptyFormState;
         }
 
@@ -83,7 +83,7 @@ export class SubjectRegisterActions {
 
         const newState = SubjectRegistrationState.createOnLoad(subject, form, isNewEntity, firstGroupWithAtLeastOneVisibleElement, filteredElements, formElementStatuses, action.workLists, minLevelTypeUUIDs, isSaveDraftOn, groupAffiliationState, context, group);
         const finalState = action.isDraftEntity ? SubjectRegisterActions.setTotalMemberForDraftSubject(newState, context) : newState;
-        finalState.structureId = action.structureId || null;
+        finalState.mapStructure = action.mapStructure || null;
 
         return QuickFormEditingActions.moveToPage(finalState, action, context, SubjectRegisterActions);
     }
@@ -150,7 +150,7 @@ export class SubjectRegisterActions {
         try {
             const newState = state.clone();
             context.get(IndividualService).register(newState.subject, action.nextScheduledVisits, action.skipCreatingPendingStatus, newState.groupAffiliation.groupSubjectObservations);
-            SubjectRegisterActions.recordStructureMapping(newState.subject.uuid, state.structureId);
+            SubjectRegisterActions.recordStructureMapping(newState.subject.uuid, state.mapStructure);
             const {member} = newState.household;
             if (!_.isNil(member)) {
                 member.memberSubject = context.get(IndividualService).findByUUID(newState.subject.uuid);
@@ -186,14 +186,11 @@ export class SubjectRegisterActions {
     }
 
     // Shelter Associates GIS: tell the GIS server which building footprint this household
-    // belongs to. Non-blocking; a failure must not stop the registration from saving.
-    static recordStructureMapping(subjectUuid, structureId) {
-        if (!structureId || !GisConfig.isConfigured()) return;
-        GisConfig.fetch('/component/map_subject_to_structure/', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({subject_uuid: subjectUuid, structure_id: structureId})
-        }).catch(e => General.logError('SubjectRegisterActions', `GIS structure mapping failed for ${structureId}: ${e.message}`));
+    // belongs to. Queued on disk and sent when possible (now, and after each sync); never
+    // blocks or fails the registration save.
+    static recordStructureMapping(subjectUuid, mapStructure) {
+        if (!_.get(mapStructure, 'structureId')) return;
+        GisMappingQueue.record({subjectUuid, structureId: mapStructure.structureId, slumUuid: mapStructure.slumUuid});
     }
 
     static getOrCreateSubject(isNewEntity, action, context) {

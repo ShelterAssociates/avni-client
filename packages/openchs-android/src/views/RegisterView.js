@@ -53,9 +53,9 @@ class RegisterView extends AbstractComponent {
             return this._addHouseholdAction(subjectType);
         }
         return {
-            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
                 {taskUuid: this.props.taskUuid,
-                    structureId,
+                    mapStructure,
                     workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`)).withRegistration(subjectType.name))})),
             label: this.I18n.t(`${subjectType.name}`),
             backgroundColor: Colors.AccentColor,
@@ -72,10 +72,10 @@ class RegisterView extends AbstractComponent {
         };
 
         return {
-            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
                 {
                     taskUuid: this.props.taskUuid,
-                    structureId,
+                    mapStructure,
                     workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`))
                         .withRegistration(subjectType.name)
                         .withHouseholdRegistration(householdParams)
@@ -88,9 +88,9 @@ class RegisterView extends AbstractComponent {
 
     _addProgramAction(subjectType, program) {
         return {
-            fn: () => this._navigateViaMap(subjectType, (structureId) => CHSNavigator.navigateToRegisterView(this,
+            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
                 {
-                    structureId,
+                    mapStructure,
                     workLists: new WorkLists(new WorkList(this.I18n.t(`REG_ENROL_DISPLAY-${program.programSubjectLabel}`))
                         .withRegistration(subjectType.name)
                         .withEnrolment(program.name)
@@ -107,7 +107,8 @@ class RegisterView extends AbstractComponent {
 
     // Shelter Associates GIS: route registration through the map picker. An already-registered
     // structure opens the existing household instead of a new form; with no Slum synced the
-    // form opens directly, as upstream does.
+    // form opens directly, as upstream does. navigateToForm receives {structureId, slumUuid}
+    // (the structure number and the Avni uuid of the slum whose map it was picked from) or null.
     _navigateViaMap(subjectType, navigateToForm) {
         const allLevels = this.context.getService(AddressLevelService).findAll('AddressLevel');
         const slum = [...allLevels].find(a => a.type === 'Slum' && !a.voided);
@@ -119,7 +120,7 @@ class RegisterView extends AbstractComponent {
             if (existingUuid) {
                 CHSNavigator.navigateToIndividualRegistrationDetails(this, existingUuid, null);
             } else {
-                navigateToForm(structureId);
+                navigateToForm(structureId ? {structureId, slumUuid: slum.uuid} : null);
             }
         });
     }

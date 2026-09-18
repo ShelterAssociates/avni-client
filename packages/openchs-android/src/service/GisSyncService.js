@@ -1,6 +1,7 @@
 import RNFS from 'react-native-fs';
 import General from '../utility/General';
 import GisConfig from '../gis/GisConfig';
+import GisMappingQueue from '../gis/GisMappingQueue';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
@@ -12,6 +13,8 @@ class GisSyncService {
                 return;
             }
             General.logInfo('GisSyncService', 'Starting GIS sync');
+            const flushed = await GisMappingQueue.flush();
+            General.logInfo('GisSyncService', `Structure mappings: sent ${flushed.sent}, dropped ${flushed.dropped}, still queued ${flushed.kept}`);
             const dirExists = await RNFS.exists(GIS_DIR);
             if (!dirExists) await RNFS.mkdir(GIS_DIR);
 
