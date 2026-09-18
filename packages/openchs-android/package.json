@@ -83,6 +83,7 @@
     "@react-native-documents/picker": "10.1.7",
     "@react-native-firebase/analytics": "20.4.0",
     "@react-native-firebase/app": "20.4.0",
+    "@turf/turf": "^7.4.0",
     "amazon-cognito-identity-js": "6.3.12",
     "avni-health-modules": "^0.0.28",
     "base-64": "^1.0.0",
