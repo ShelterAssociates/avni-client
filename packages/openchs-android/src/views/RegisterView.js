@@ -118,7 +118,8 @@ class RegisterView extends AbstractComponent {
             navigateToForm(null);
             return;
         }
-        CHSNavigator.navigateToMapPicker(this, slums, slums[0].uuid, (structureId, existingUuid, slumUuid) => {
+        const picker = {slums, initialSlumUuid: slums[0].uuid, subjectTypeName: subjectType.name};
+        CHSNavigator.navigateToMapPicker(this, picker, (structureId, existingUuid, slumUuid) => {
             if (existingUuid) {
                 CHSNavigator.navigateToIndividualRegistrationDetails(this, existingUuid, null);
             } else {

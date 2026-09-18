@@ -712,13 +712,17 @@ class CHSNavigator {
     }
 
     // slums: [{uuid, name}] the worker can switch between; the picker opens on initialSlumUuid.
+    // subjectTypeName: the subject type being registered — the picker's status and filters are
+    // built from that type's households and registration form.
     // onStructurePicked(structureId, existingSubjectUuid, slumUuid) — slumUuid is the slum the
     // structure was picked from, which may differ from initialSlumUuid.
-    static navigateToMapPicker(source, slums, initialSlumUuid, onStructurePicked) {
+    static navigateToMapPicker(source, {slums, initialSlumUuid, subjectTypeName}, onStructurePicked) {
         const MapPickerScreen = require('../views/MapPickerScreen').default;
         _mapPickerCallback = onStructurePicked;
         const initial = _.find(slums, {uuid: initialSlumUuid}) || _.head(slums);
-        TypedTransition.from(source).with({slums, avniUuid: initial.uuid, slumName: initial.name}).to(MapPickerScreen, true);
+        TypedTransition.from(source)
+            .with({slums, avniUuid: initial.uuid, slumName: initial.name, subjectTypeName})
+            .to(MapPickerScreen, true);
     }
 
     static invokeMapPickerCallback(structureId, existingUuid, slumUuid) {
