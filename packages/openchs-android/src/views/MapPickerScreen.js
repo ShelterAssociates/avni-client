@@ -9,6 +9,7 @@ import TypedTransition from '../framework/routing/TypedTransition';
 import IndividualService from '../service/IndividualService';
 import ConceptService from '../service/ConceptService';
 import {structureKey, STRUCTURE_KEY_SOURCE} from '../gis/structureNumber';
+import {answerLabels, combinedAnswerLabel, findObservation} from '../gis/observationAnswers';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
@@ -78,39 +79,6 @@ class MapPickerScreen extends AbstractComponent {
         }
     }
 
-    // Read answer value from a single observation's valueJSON
-    resolveObsValue(obs, conceptService) {
-        try {
-            const valueJSON = obs.valueJSON;
-            if (!valueJSON) return null;
-
-            const parsed = typeof valueJSON === 'string' ? JSON.parse(valueJSON) : valueJSON;
-
-            // Coded answer — answer field is a UUID, resolve to concept name
-            if (parsed.answer && typeof parsed.answer === 'string' &&
-                parsed.answer.includes('-') && parsed.answer.length > 30) {
-                // Looks like a UUID
-                const answerConcept = conceptService.getConceptByUUID(parsed.answer);
-                if (answerConcept) return answerConcept.name;
-                return parsed.answer; // fallback to uuid if not found
-            }
-
-            // Numeric or text answer — answer field is the actual value
-            if (parsed.answer !== undefined && parsed.answer !== null) {
-                return String(parsed.answer);
-            }
-
-            // value field fallback
-            if (parsed.value !== undefined && parsed.value !== null) {
-                return String(parsed.value);
-            }
-
-            return null;
-        } catch (e) {
-            return null;
-        }
-    }
-
     loadConceptFilter(conceptName) {
         this.setState({ filterLoading: true, selectedConcept: conceptName });
 
@@ -130,15 +98,10 @@ class MapPickerScreen extends AbstractComponent {
 
                     let answerValue = null;
                     try {
-                        for (let i = 0; i < subject.observations.length; i++) {
-                            const obs = subject.observations[i];
-                            if (obs.concept && obs.concept.name === conceptName) {
-                                answerValue = this.resolveObsValue(obs, conceptService);
-                                break;
-                            }
-                        }
+                        const obs = findObservation(subject.observations, { name: conceptName });
+                        answerValue = combinedAnswerLabel(answerLabels(obs, conceptService));
                     } catch (e) {
-                        // skip
+                        // a malformed observation must not take the whole filter down
                     }
 
                     if (answerValue) {
