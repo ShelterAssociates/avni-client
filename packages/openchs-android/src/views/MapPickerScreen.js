@@ -8,6 +8,7 @@ import Path from '../framework/routing/Path';
 import TypedTransition from '../framework/routing/TypedTransition';
 import IndividualService from '../service/IndividualService';
 import ConceptService from '../service/ConceptService';
+import {structureKey, STRUCTURE_KEY_SOURCE} from '../gis/structureNumber';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
@@ -68,14 +69,8 @@ class MapPickerScreen extends AbstractComponent {
             const allSubjects = individualService.findAll();
             const statusMap = {};
             allSubjects.forEach(subject => {
-                if (subject.firstName) {
-                    const name = String(subject.firstName).trim();
-                    const entry = { status: 'registered', uuid: subject.uuid };
-                    statusMap[name] = entry;
-                    const asInt = String(parseInt(name, 10));
-                    if (asInt !== 'NaN') statusMap[asInt] = entry;
-                    statusMap[name.padStart(4, '0')] = entry;
-                }
+                const key = structureKey(subject.firstName);
+                if (key) statusMap[key] = { status: 'registered', uuid: subject.uuid };
             });
             this.setState({ statusMap });
         } catch (e) {
@@ -130,8 +125,8 @@ class MapPickerScreen extends AbstractComponent {
                 const answerSet = {};   // answer text -> true
 
                 allSubjects.forEach(subject => {
-                    if (!subject.firstName || !subject.observations) return;
-                    const name = String(subject.firstName).trim();
+                    const key = structureKey(subject.firstName);
+                    if (!key || !subject.observations) return;
 
                     let answerValue = null;
                     try {
@@ -148,10 +143,7 @@ class MapPickerScreen extends AbstractComponent {
 
                     if (answerValue) {
                         answerSet[answerValue] = true;
-                        conceptMap[name] = answerValue;
-                        const asInt = String(parseInt(name, 10));
-                        if (asInt !== 'NaN') conceptMap[asInt] = answerValue;
-                        conceptMap[name.padStart(4, '0')] = answerValue;
+                        conceptMap[key] = answerValue;
                     }
                 });
 
@@ -249,15 +241,10 @@ class MapPickerScreen extends AbstractComponent {
 
     handleSearch() {
         const { searchText } = this.state;
-        if (!searchText.trim()) return;
-        const query = searchText.trim();
-        const asInt = String(parseInt(query, 10));
-        const padded = query.padStart(4, '0');
+        const key = structureKey(searchText);
+        if (!key) return;
         if (this.webViewRef.current) {
-            this.webViewRef.current.postMessage(JSON.stringify({
-                type: 'searchStructure',
-                variants: [query, asInt, padded],
-            }));
+            this.webViewRef.current.postMessage(JSON.stringify({ type: 'searchStructure', key }));
         }
     }
 
@@ -265,11 +252,7 @@ class MapPickerScreen extends AbstractComponent {
         try {
             const data = JSON.parse(event.nativeEvent.data);
             if (data.type === 'structureSelected') {
-                const { statusMap } = this.state;
-                const sid = String(data.structureId).trim();
-                const entry = statusMap[sid]
-                    || statusMap[String(parseInt(sid, 10))]
-                    || statusMap[sid.padStart(4, '0')];
+                const entry = this.state.statusMap[structureKey(data.structureId)];
                 this.setState({
                     selected: data.structureId,
                     selectedExistingUuid: entry ? entry.uuid : null,
@@ -324,28 +307,11 @@ class MapPickerScreen extends AbstractComponent {
     var layerIndex = {};
     var labelLayers = [];
 
-    function norm(sid) {
-        sid = String(sid).trim();
-        var asInt = String(parseInt(sid, 10));
-        var padded = sid.length < 4 ? sid.padStart(4,'0') : sid;
-        return [sid, asInt, padded];
-    }
+    // Same implementation as the React Native side (src/gis/structureNumber.js).
+    ${STRUCTURE_KEY_SOURCE}
 
-    function lookupStatus(sid) {
-        var keys = norm(sid);
-        for (var i=0; i<keys.length; i++) {
-            if (statusMap[keys[i]]) return statusMap[keys[i]];
-        }
-        return null;
-    }
-
-    function lookupConcept(sid) {
-        var keys = norm(sid);
-        for (var i=0; i<keys.length; i++) {
-            if (conceptMap[keys[i]]) return conceptMap[keys[i]];
-        }
-        return null;
-    }
+    function lookupStatus(sid) { return statusMap[structureKey(sid)] || null; }
+    function lookupConcept(sid) { return conceptMap[structureKey(sid)] || null; }
 
     function getStyle(structureId, isSelected, isSearch) {
         var sid = String(structureId).trim();
@@ -369,8 +335,7 @@ class MapPickerScreen extends AbstractComponent {
         style: function(f) { return getStyle(f.properties.s, false, false); },
         onEachFeature: function(feature, layer) {
             var sid = String(feature.properties.s).trim();
-            var keys = norm(sid);
-            keys.forEach(function(k) { layerIndex[k] = layer; });
+            layerIndex[structureKey(sid)] = layer;
 
             layer.on('click', function() {
                 if (selectedLayer) {
@@ -412,8 +377,7 @@ class MapPickerScreen extends AbstractComponent {
     function refreshAll() {
         geojson.features.forEach(function(feature) {
             var sid = String(feature.properties.s).trim();
-            var keys = norm(sid);
-            var layer = layerIndex[keys[0]];
+            var layer = layerIndex[structureKey(sid)];
             if (!layer) return;
             var isSel = selectedLayer &&
                 String(selectedLayer.feature.properties.s) === String(feature.properties.s);
@@ -426,11 +390,7 @@ class MapPickerScreen extends AbstractComponent {
             var data = JSON.parse(e.data);
 
             if (data.type === 'searchStructure') {
-                var found = null;
-                for (var i=0; i<data.variants.length; i++) {
-                    var key = String(data.variants[i]);
-                    if (layerIndex[key]) { found = layerIndex[key]; break; }
-                }
+                var found = layerIndex[structureKey(data.key)] || null;
                 if (found) {
                     if (selectedLayer) {
                         selectedLayer.setStyle(getStyle(selectedLayer.feature.properties.s, false, false));
