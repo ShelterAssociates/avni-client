@@ -220,7 +220,7 @@ class SyncComponent extends AbstractComponent {
             if (syncSucceeded) {
                 // Shelter Associates GIS: download building polygons for the synced slums so the
                 // map picker works offline. Errors are logged inside the service, never surfaced here.
-                await GisSyncService.syncGisData(this.context.getService(AddressLevelService));
+                await GisSyncService.syncGisData(this.context.getService(AddressLevelService), (message) => this.messageCallBack(message));
                 this.dispatchAction(SyncActions.SET_SHOW_OK_BUTTON, {show: true});
             }
         } else {

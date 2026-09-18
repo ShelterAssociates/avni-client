@@ -6,23 +6,34 @@ import GisMappingQueue from '../gis/GisMappingQueue';
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
 class GisSyncService {
-    static async syncGisData(addressLevelService) {
+    // onMessage(text) receives one-line progress for the sync screen, e.g.
+    // "Downloading map 2/4: Baliram Nagar". Optional.
+    static async syncGisData(addressLevelService, onMessage = () => {}) {
         try {
             if (!GisConfig.isConfigured()) {
                 General.logWarn('GisSyncService', 'GIS_SERVER_URL / GIS_API_KEY not set in Config.js; skipping GIS sync');
                 return;
             }
             General.logInfo('GisSyncService', 'Starting GIS sync');
+            onMessage('Sending household ↔ structure links to GIS');
             const flushed = await GisMappingQueue.flush();
             General.logInfo('GisSyncService', `Structure mappings: sent ${flushed.sent}, dropped ${flushed.dropped}, still queued ${flushed.kept}`);
+            if (flushed.kept > 0) onMessage(`${flushed.kept} household ↔ structure link(s) still waiting for the GIS server`);
             const dirExists = await RNFS.exists(GIS_DIR);
             if (!dirExists) await RNFS.mkdir(GIS_DIR);
 
             const allAddressLevels = addressLevelService.findAll('AddressLevel');
             const slums = [...allAddressLevels].filter(a => a.type === 'Slum' && !a.voided);
-            for (const slum of slums) {
-                await GisSyncService.downloadStructuresForSlum(slum.uuid, slum.name);
+            let failed = 0;
+            for (let i = 0; i < slums.length; i++) {
+                const slum = slums[i];
+                onMessage(`Downloading map ${i + 1}/${slums.length}: ${slum.name}`);
+                const ok = await GisSyncService.downloadStructuresForSlum(slum.uuid, slum.name);
+                if (!ok) failed++;
             }
+            onMessage(failed === 0
+                ? `Maps updated for ${slums.length} slum(s)`
+                : `Maps updated for ${slums.length - failed} of ${slums.length} slum(s); ${failed} could not be downloaded`);
 
         } catch (e) {
             General.logError('GisSyncService', e);
@@ -35,19 +46,21 @@ class GisSyncService {
 
         General.logInfo('GisSyncService', `Downloading GIS for slum: ${slumName}`);
 
-        const response = await GisConfig.fetch(path);
-        if (!response.ok) {
-            General.logWarn('GisSyncService', `GIS fetch failed for ${slumName}: HTTP ${response.status}`);
-            return; // skip this slum, don't crash
+        try {
+            const response = await GisConfig.fetch(path);
+            if (!response.ok) {
+                General.logWarn('GisSyncService', `GIS fetch failed for ${slumName}: HTTP ${response.status}`);
+                return false; // keep whatever was downloaded last time
+            }
+            const text = await response.text();
+            JSON.parse(text); // make sure it is valid JSON before replacing the saved copy
+            await RNFS.writeFile(destPath, text, 'utf8');
+            General.logInfo('GisSyncService', `GIS saved for ${slumName} at ${destPath}`);
+            return true;
+        } catch (e) {
+            General.logWarn('GisSyncService', `GIS download failed for ${slumName}: ${e.message}`);
+            return false;
         }
-
-        const text = await response.text();
-
-        // Basic validation — make sure it's valid JSON before saving
-        JSON.parse(text);
-
-        await RNFS.writeFile(destPath, text, 'utf8');
-        General.logInfo('GisSyncService', `GIS saved for ${slumName} at ${destPath}`);
     }
 
     // Used by MapPickerScreen to load structures offline
