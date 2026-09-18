@@ -1,21 +1,17 @@
 import AbstractComponent from "../framework/view/AbstractComponent";
 import General from "../utility/General";
-import {ScrollView, StyleSheet, Text, TouchableNativeFeedback, View} from "react-native";
+import {ActivityIndicator, InteractionManager, ScrollView, StyleSheet, Text, TouchableNativeFeedback, View} from "react-native";
 import React from "react";
 import CHSContainer from "./common/CHSContainer";
 import AppHeader from "./common/AppHeader";
 import CHSContent from "./common/CHSContent";
-import EntityService from "../service/EntityService";
-import {Privilege, SubjectType, WorkList, WorkLists} from "avni-models";
+import {WorkList, WorkLists} from "avni-models";
 import CHSNavigator from "../utility/CHSNavigator";
 import Colors from "./primitives/Colors";
 import _ from "lodash";
 import Distances from "./primitives/Distances";
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Fonts from "./primitives/Fonts";
-import FormMappingService from "../service/FormMappingService";
-import PrivilegeService from "../service/PrivilegeService";
-import GroupSubjectService from "../service/GroupSubjectService";
 import AddressLevelService from "../service/AddressLevelService";
 import UserInfoService from "../service/UserInfoService";
 import DraftSubjectService from "../service/draft/DraftSubjectService";
@@ -30,6 +26,8 @@ import PropTypes from "prop-types";
 import Styles from "./primitives/Styles";
 import ContextAction from "./viewmodel/ContextAction";
 import ObservationsSectionOptions from "./common/ObservationsSectionOptions";
+import {mapEntry} from "../gis/mapEntry";
+import {registrationChoices, workListsFor} from "../gis/mapBrowser";
 
 class RegisterView extends AbstractComponent {
     static propTypes = {
@@ -48,84 +46,39 @@ class RegisterView extends AbstractComponent {
         super.UNSAFE_componentWillMount();
     }
 
-    _addRegistrationAction(subjectType) {
-        if (subjectType.isHousehold()) {
-            return this._addHouseholdAction(subjectType);
-        }
+    _action(choice) {
         return {
-            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
-                {taskUuid: this.props.taskUuid,
-                    mapStructure,
-                    workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`)).withRegistration(subjectType.name))})),
-            label: this.I18n.t(`${subjectType.name}`),
-            backgroundColor: Colors.AccentColor,
-        }
-    }
-
-    _addHouseholdAction(subjectType) {
-        const groupRole = this.getService(GroupSubjectService).getGroupRoles(subjectType)[0];
-
-        const householdParams = {
-            subjectTypeName: _.get(groupRole, 'memberSubjectType.name'),
-            saveAndProceedLabel: 'registerHeadOfFamily',
-            headOfHousehold: true
+            fn: () => this._navigateViaMap(choice.subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
+                {taskUuid: this.props.taskUuid, mapStructure, workLists: workListsFor(choice, this.context)})),
+            label: choice.label,
+            backgroundColor: choice.program ? choice.program.colour : Colors.AccentColor,
         };
-
-        return {
-            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
-                {
-                    taskUuid: this.props.taskUuid,
-                    mapStructure,
-                    workLists: new WorkLists(new WorkList(this.I18n.t(`${subjectType.name}`))
-                        .withRegistration(subjectType.name)
-                        .withHouseholdRegistration(householdParams)
-                    )
-                })),
-            label: this.I18n.t(`${subjectType.name}`),
-            backgroundColor: Colors.AccentColor,
-        }
     }
 
-    _addProgramAction(subjectType, program) {
-        return {
-            fn: () => this._navigateViaMap(subjectType, (mapStructure) => CHSNavigator.navigateToRegisterView(this,
-                {
-                    mapStructure,
-                    workLists: new WorkLists(new WorkList(this.I18n.t(`REG_ENROL_DISPLAY-${program.programSubjectLabel}`))
-                        .withRegistration(subjectType.name)
-                        .withEnrolment(program.name)
-                    )
-                })),
-            label: this.I18n.t(`REG_ENROL_DISPLAY-${program.programSubjectLabel}`),
-            backgroundColor: program.colour,
-        }
-    }
-
-    _addProgramActions(subjectType, programs) {
-        return _.map(programs, program => this._addProgramAction(subjectType, program));
-    }
-
-    // Shelter Associates GIS: route registration through the map picker. An already-registered
-    // structure opens the existing household instead of a new form; with no Slum synced the
-    // form opens directly, as upstream does. navigateToForm receives {structureId, slumUuid}
+    // Shelter Associates GIS: route registration through the map picker (registered structures open
+    // the household from the map itself); with no Slum synced the form opens directly, as upstream
+    // does. navigateToForm receives {structureId, slumUuid}
     // (the structure number and the Avni uuid of the slum whose map it was picked from) or null.
     _navigateViaMap(subjectType, navigateToForm) {
-        // Every synced Slum is one the worker is assigned to (sync is catchment-scoped).
-        const slums = _.sortBy(
-            this.context.getService(AddressLevelService).findAllByCriteria(`type = 'Slum' AND voided = false`).map(a => ({uuid: a.uuid, name: a.name})),
-            'name');
+        const {slums} = mapEntry(this.context.getService(AddressLevelService));
         if (_.isEmpty(slums)) {
             navigateToForm(null);
             return;
         }
         const picker = {slums, initialSlumUuid: slums[0].uuid, subjectTypeName: subjectType.name};
-        CHSNavigator.navigateToMapPicker(this, picker, (structureId, existingUuid, slumUuid) => {
-            if (existingUuid) {
-                CHSNavigator.navigateToIndividualRegistrationDetails(this, existingUuid, null);
-            } else {
-                navigateToForm(structureId ? {structureId, slumUuid} : null);
-            }
+        this.setState({openingMap: true}, () => {
+            CHSNavigator.navigateToMapPicker(this, picker, (structureId, _existingUuid, slumUuid) => navigateToForm(structureId ? {structureId, slumUuid} : null));
+            InteractionManager.runAfterInteractions(() => this.setState({openingMap: false}));
         });
+    }
+
+    renderOpeningMap() {
+        return this.state.openingMap ? (
+            <View style={styles.openingMap}>
+                <ActivityIndicator size="large" color={Colors.AccentColor}/>
+                <Text style={styles.openingMapText}>{this.I18n.t('openingMap')}</Text>
+            </View>
+        ) : null;
     }
 
     renderButton(onPress, buttonColor, text, textColor, index, subjectType, totalActions) {
@@ -212,32 +165,8 @@ class RegisterView extends AbstractComponent {
 
     render() {
         General.logDebug("RegisterView", "render");
-        let actions = [];
-
-        const registerCriteria = `privilege.name = '${Privilege.privilegeName.registerSubject}' AND privilege.entityType = '${Privilege.privilegeEntityType.subject}'`;
-        const privilegeService = this.context.getService(PrivilegeService);
-        const allowedSubjectTypeUuids = privilegeService.allowedEntityTypeUUIDListForCriteria(registerCriteria, 'subjectTypeUuid');
-        const subjectTypes = this.context.getService(EntityService).findAllByCriteria('voided = false AND active = true', SubjectType.schema.name)
-            .filter(st => privilegeService.hasAllPrivileges() || _.includes(allowedSubjectTypeUuids, st.uuid));
-
-        _.sortBy(subjectTypes, ({name}) => this.I18n.t(name)).forEach(subjectType => {
-            let formMappingService = this.context.getService(FormMappingService);
-            // Sometimes, a register form might not be provided. Register functionality does not work without that.
-            if (!formMappingService.findRegistrationForm(subjectType)) {
-                return;
-            }
-            actions = actions.concat({action: this._addRegistrationAction(subjectType), subjectType});
-            const enrolCriteria = `privilege.name = '${Privilege.privilegeName.enrolSubject}' AND privilege.entityType = '${Privilege.privilegeEntityType.enrolment}' AND subjectTypeUuid = '${subjectType.uuid}'`;
-            const allowedProgramTypeUuids = privilegeService.allowedEntityTypeUUIDListForCriteria(enrolCriteria, 'programUuid');
-            const programs = formMappingService.findActiveProgramsForSubjectType(subjectType)
-                .filter(p => privilegeService.hasAllPrivileges() || _.includes(allowedProgramTypeUuids, p.uuid));
-            if (this.userSettings.registerEnrol) {
-                actions = actions.concat(this._addProgramActions(subjectType, programs).map(action => ({
-                    action,
-                    subjectType
-                })));
-            }
-        });
+        const actions = registrationChoices(this.context, this.I18n, this.userSettings.registerEnrol)
+            .map(choice => ({action: this._action(choice), subjectType: choice.subjectType}));
 
         return (
             <CHSContainer style={{backgroundColor: Colors.GreyContentBackground, marginBottom: Styles.HeightOfBottomBar}}>
@@ -258,6 +187,7 @@ class RegisterView extends AbstractComponent {
                         {this.renderDrafts()}
                     </ScrollView>
                 </CHSContent>
+                {this.renderOpeningMap()}
             </CHSContainer>
         );
     }
@@ -266,6 +196,8 @@ class RegisterView extends AbstractComponent {
 export default RegisterView
 
 const styles = StyleSheet.create({
+    openingMap: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', gap: 12},
+    openingMapText: {color: Colors.TextOnPrimaryColor, fontSize: 16},
     container: {
         minHeight: 72,
         backgroundColor: Colors.cardBackgroundColor,

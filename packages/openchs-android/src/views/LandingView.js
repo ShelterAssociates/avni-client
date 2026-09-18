@@ -32,6 +32,8 @@ import UserInfoService from "../service/UserInfoService";
 import Perf from "../utility/perf";
 import {CopilotProvider, CopilotStep, walkthroughable, useCopilot} from "react-native-copilot";
 import CopilotTooltip from "./common/CopilotTooltip";
+import {mapAvailable} from "../gis/mapBrowser";
+import MapChoices, {openMap} from "./gis/MapChoices";
 
 const WalkthroughableView = walkthroughable(View);
 
@@ -301,6 +303,8 @@ class LandingView extends AbstractComponent {
     }
 
     static barIconStyle = {color: Colors.bottomBarIconColor, opacity: 0.8, alignSelf: 'center', fontSize: 33};
+    static mapButtonStyle = {position: 'absolute', right: 16, bottom: LandingView.layoutConstants.bottomBarHeight + 16, width: 56, height: 56, borderRadius: 28, elevation: 6,
+        backgroundColor: Colors.AccentColor, alignItems: 'center', justifyContent: 'center'};
 
     renderCustomDashboard(startSync) {
         return (
@@ -324,6 +328,18 @@ class LandingView extends AbstractComponent {
                 icon={(name, style) => this.Icon(name, style)}
                 onSearch={() => this.dispatchAction(Actions.ON_SEARCH_CLICK)}
             />
+        );
+    }
+
+    renderMapButton() {
+        if (!mapAvailable(this.context)) return null;
+        return (
+            <View>
+                <TouchableOpacity style={LandingView.mapButtonStyle} onPress={() => openMap(this, open => this.setState({mapChoicesOpen: open}))}>
+                    <AvniIcon name="map" type="MaterialCommunityIcons" style={{color: Colors.TextOnPrimaryColor, fontSize: 28}}/>
+                </TouchableOpacity>
+                <MapChoices source={this} visible={!!this.state.mapChoicesOpen} anchor="bottom-right" onClose={() => this.setState({mapChoicesOpen: false})}/>
+            </View>
         );
     }
 
@@ -402,6 +418,7 @@ class LandingView extends AbstractComponent {
                     General.logDebug('LandingView', `render - Rendering dashboard with startSync: ${startSync}`);
                     return this.renderDashboard(startSync);
                 }.bind(this)())}
+                {home && this.renderMapButton()}
                 {search && (function() {
                     General.logDebug('LandingView', 'render - Rendering IndividualSearchView');
                     return <IndividualSearchView

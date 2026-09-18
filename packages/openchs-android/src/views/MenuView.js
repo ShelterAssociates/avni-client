@@ -41,6 +41,8 @@ import EnvironmentConfig from "../framework/EnvironmentConfig";
 import GlobalContext from "../GlobalContext";
 import { getAvniError } from "../service/ServerError";
 import { AlertMessage } from "./common/AlertMessage";
+import {mapAvailable} from "../gis/mapBrowser";
+import MapChoices, {openMap} from "./gis/MapChoices";
 import MessageService from "../service/MessageService";
 
 @Path('/menuView')
@@ -340,6 +342,10 @@ class MenuView extends AbstractComponent {
 
         General.logDebug("MenuView", "render");
         const functionalityItems = this.getMenuItems(StaticMenuItemFactory.getFunctionalityMenus(this.beneficiaryModeStatus()), configuredMenuItems, MenuItem.FunctionalityGroupName);
+        if (mapAvailable(this.context)) {
+            functionalityItems.unshift(<MenuView.Item key="slumMap" I18n={this.I18n} icon={this.icon("map")} titleKey="slumMap"
+                                                      onPress={() => openMap(this, open => this.setState({mapChoicesOpen: open}))}/>);
+        }
         if (this.getService(NewsService).isAnyNewsAvailable()) {
             const unreadNews = this.getService(NewsService).getUnreadNewsCount();
             functionalityItems.push(this.renderNewsBadge(unreadNews));
@@ -435,7 +441,7 @@ class MenuView extends AbstractComponent {
                         <Separator height={100} backgroundColor={Colors.GreyContentBackground}/>
                     </CHSContent>
                 </ScrollView>
-
+                <MapChoices source={this} visible={!!this.state.mapChoicesOpen} onClose={() => this.setState({mapChoicesOpen: false})}/>
             </CHSContainer>
         );
     }
