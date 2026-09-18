@@ -1,15 +1,15 @@
 import {assert} from "chai";
 
-jest.mock("../../src/framework/Config", () => ({}), {virtual: true});
-const Config = require("../../src/framework/Config");
-const {default: GisConfig, GIS_API_KEY_HEADER} = require("../../src/gis/GisConfig");
+import GisConfig, {GIS_API_KEY_HEADER} from "../../src/gis/GisConfig";
 
 describe("GisConfig", () => {
+    let Config;
     beforeEach(() => {
-        delete Config.GIS_SERVER_URL;
-        delete Config.GIS_API_KEY;
+        Config = {};
+        GisConfig.override(Config);
         global.fetch = jest.fn(() => Promise.resolve({ok: true}));
     });
+    afterEach(() => GisConfig.override(null));
 
     it("is not configured until both the url and the key are set", () => {
         assert.isFalse(GisConfig.isConfigured());

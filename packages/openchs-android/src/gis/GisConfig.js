@@ -9,13 +9,24 @@ function trimmed(value) {
     return _.isString(value) ? value.trim() : "";
 }
 
+// Tests substitute settings here instead of mocking the generated Config.js.
+let overrides = null;
+
 class GisConfig {
+    static override(settings) {
+        overrides = settings;
+    }
+
+    static get settings() {
+        return overrides || Config;
+    }
+
     static get serverUrl() {
-        return _.trimEnd(trimmed(Config.GIS_SERVER_URL), "/");
+        return _.trimEnd(trimmed(GisConfig.settings.GIS_SERVER_URL), "/");
     }
 
     static get apiKey() {
-        return trimmed(Config.GIS_API_KEY);
+        return trimmed(GisConfig.settings.GIS_API_KEY);
     }
 
     // Both are needed: the server answers 401 without the key and 503 when it

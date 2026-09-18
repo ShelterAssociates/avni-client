@@ -1,28 +1,32 @@
 import {assert} from "chai";
 
-const files = {};
+const mockFiles = {};
 jest.mock("react-native-fs", () => ({
     DocumentDirectoryPath: "/doc",
-    exists: jest.fn(path => Promise.resolve(path === "/doc/gis" || Object.prototype.hasOwnProperty.call(files, path))),
+    exists: jest.fn(path => Promise.resolve(path === "/doc/gis" || Object.prototype.hasOwnProperty.call(mockFiles, path))),
     mkdir: jest.fn(() => Promise.resolve()),
-    readFile: jest.fn(path => Promise.resolve(files[path])),
-    writeFile: jest.fn((path, content) => { files[path] = content; return Promise.resolve(); }),
+    readFile: jest.fn(path => Promise.resolve(mockFiles[path])),
+    writeFile: jest.fn((path, content) => { mockFiles[path] = content; return Promise.resolve(); }),
 }));
-jest.mock("../../src/framework/Config", () => ({GIS_SERVER_URL: "http://gis", GIS_API_KEY: "k"}), {virtual: true});
 jest.mock("../../src/utility/General", () => ({logError: jest.fn(), logWarn: jest.fn(), logInfo: jest.fn()}));
 
-const Config = require("../../src/framework/Config");
-const {default: GisMappingQueue, QUEUE_FILE} = require("../../src/gis/GisMappingQueue");
+import GisConfig from "../../src/gis/GisConfig";
+import GisMappingQueue, {QUEUE_FILE} from "../../src/gis/GisMappingQueue";
+
+const Config = {GIS_SERVER_URL: "http://gis", GIS_API_KEY: "k"};
 
 const mapping = (n) => ({subjectUuid: `sub-${n}`, structureId: String(n), slumUuid: "slum-uuid"});
-const queued = () => JSON.parse(files[QUEUE_FILE] || "[]").map(i => i.subjectUuid);
+const queued = () => JSON.parse(mockFiles[QUEUE_FILE] || "[]").map(i => i.subjectUuid);
 
 describe("GisMappingQueue", () => {
     beforeEach(() => {
-        Object.keys(files).forEach(k => delete files[k]);
+        Object.keys(mockFiles).forEach(k => delete mockFiles[k]);
         Config.GIS_API_KEY = "k";
+        GisConfig.override(Config);
         global.fetch = jest.fn(() => Promise.resolve({ok: true, status: 200}));
     });
+
+    afterEach(() => GisConfig.override(null));
 
     it("persists before sending and clears the queue once the server accepts", async () => {
         const result = await GisMappingQueue.record(mapping(1));
@@ -68,7 +72,7 @@ describe("GisMappingQueue", () => {
         global.fetch = jest.fn(() => Promise.reject(new Error("offline")));
         await GisMappingQueue.record(mapping(1));
         await GisMappingQueue.record({...mapping(1), structureId: "9"});
-        const items = JSON.parse(files[QUEUE_FILE]);
+        const items = JSON.parse(mockFiles[QUEUE_FILE]);
         assert.equal(items.length, 1);
         assert.equal(items[0].structureId, "9");
     });
@@ -80,7 +84,7 @@ describe("GisMappingQueue", () => {
     });
 
     it("starts empty when the queue file is corrupt", async () => {
-        files[QUEUE_FILE] = "{not json";
+        mockFiles[QUEUE_FILE] = "{not json";
         assert.deepEqual(await GisMappingQueue.load(), []);
     });
 });
