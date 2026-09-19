@@ -114,6 +114,8 @@ packages/openchs-android/android/app/src/tanuh/assets/models/*
 
 # tanuh release keystore — never committed.
 tanuh-release-key.keystore
+# Shelter Associates signing key (KEY_STORE_PREFIX=shelter-) — never committed.
+shelter-*-release-key.keystore
 
 # bundletool jar + bundletool output, downloaded/produced by the bundle targets.
 bundletool.jar
