@@ -3,7 +3,7 @@ import React from "react";
 import AbstractComponent from "../../framework/view/AbstractComponent";
 import TypedTransition from "../../framework/routing/TypedTransition";
 import MCIIcon from "react-native-vector-icons/MaterialCommunityIcons";
-import {Platform, Text, TouchableNativeFeedback, View} from "react-native";
+import {Image, Platform, Text, TouchableNativeFeedback, View} from "react-native";
 import _ from "lodash";
 import Colors from "../primitives/Colors";
 import {edgeToEdgeStatusBarInset} from "../primitives/Distances";
@@ -66,6 +66,17 @@ class AppHeader extends AbstractComponent {
         return TouchableNativeFeedback.SelectableBackgroundBorderless();
     }
 
+    // Top-level screens carry the Shelter Associates mark: this is their customised build of Avni.
+    renderBrand() {
+        return (
+            <View style={{flexDirection: 'row', alignItems: 'center', height: 56, paddingLeft: 16, paddingRight: 12, gap: 6}}>
+                <Image source={{uri: 'asset:/shelter-logo.png'}} style={{width: 78, height: 22}} resizeMode="contain"/>
+                <Text style={{color: Colors.headerTextColor, fontSize: 12, opacity: 0.85}}>× Avni</Text>
+                <View style={{width: 1, height: 24, backgroundColor: Colors.headerTextColor, opacity: 0.35, marginLeft: 6}}/>
+            </View>
+        );
+    }
+
     renderHomeIcon() {
         return <TouchableNativeFeedback
             onPress={() => (_.isNil(this.props.iconFunc) ? this.onHome() : this.props.iconFunc())}
@@ -107,7 +118,7 @@ class AppHeader extends AbstractComponent {
                 // Padding rather than a margin, so the bar's own colour still fills the status bar area.
                 paddingTop: edgeToEdgeStatusBarInset(insets),
             }}>
-                {hideBackButton ? <View/> :
+                {hideBackButton ? this.renderBrand() :
                     <TouchableNativeFeedback onPress={() => this.onBack()}
                                              background={this.background()}>
                         <View style={{
@@ -123,10 +134,7 @@ class AppHeader extends AbstractComponent {
                     </TouchableNativeFeedback>}
 
                 <View style={{flex: 1, flexDirection: 'row', alignSelf: 'center'}}>
-                    <Text style={[{
-                        color: Colors.headerTextColor,
-                        fontSize: 18
-                    }, hideBackButton && {marginLeft: 20}]}>{title}</Text>
+                    <Text numberOfLines={1} style={{color: Colors.headerTextColor, fontSize: 18}}>{title}</Text>
                 </View>
                 {renderSearch && <TouchableNativeFeedback onPress={() => onSearch()} background={this.background()}>
                     <View style={{
