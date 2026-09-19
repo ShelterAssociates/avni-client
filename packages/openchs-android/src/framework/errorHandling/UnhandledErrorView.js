@@ -1,7 +1,8 @@
 import React, {Component} from 'react';
-import {Image, View} from "react-native";
+import {View} from "react-native";
 import PropTypes from "prop-types";
 import {ErrorDisplay} from "./ErrorDisplay";
+import BrandLogos from "../../views/common/BrandLogos";
 import {JSONStringify} from "../../utility/JsonStringify";
 
 export default class UnhandledErrorView extends Component {
@@ -12,8 +13,7 @@ export default class UnhandledErrorView extends Component {
     render() {
         console.log("UnhandledErrorView", JSONStringify(this.props.avniError));
         return <View style={{flex: 1}}>
-            <Image source={{uri: `asset:/logo.png`}}
-                   style={{height: 120, width: 120, alignSelf: 'center'}} resizeMode={'center'}/>
+            <View style={{paddingVertical: 24}}><BrandLogos/></View>
             <ErrorDisplay avniError={this.props.avniError}/>
         </View>
     }

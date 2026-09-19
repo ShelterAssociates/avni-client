@@ -125,7 +125,7 @@ class App extends Component {
         const message = `Upgrading Database. May take upto 15 minutes on slow devices with a lot of Avni data.`;
         return (
             <View style={{flex: 1, flexDirection: "column", alignItems: 'center', justifyContent: 'center'}}>
-                <View style={{marginBottom: 24}}><BrandLogos height={48}/></View>
+                <View style={{marginTop: 72, marginBottom: 40}}><BrandLogos height={48}/></View>
 
                 <KeepAwake/>
                 <Text style={{fontSize: 17, paddingHorizontal: 10, marginBottom: 20}}>{message}</Text>
