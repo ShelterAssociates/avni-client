@@ -7,7 +7,7 @@ import {
     Text,
     TouchableNativeFeedback,
     View,
-    BackHandler, Image, Dimensions, ToastAndroid
+    BackHandler, Dimensions, ToastAndroid
 } from 'react-native';
 import Clipboard from "@react-native-clipboard/clipboard";
 import TextFormElement from './form/formElement/TextFormElement';
@@ -42,6 +42,7 @@ import { AlertMessage } from "./common/AlertMessage";
 import IssueUploadUtil from "../utility/IssueUploadUtil";
 import RNRestart from 'react-native-restart';
 import ProgressBarView from "./ProgressBarView";
+import BrandLogos from "./common/BrandLogos";
 import LocalCacheService from "../service/LocalCacheService";
 
 @Path('/loginView')
@@ -235,8 +236,7 @@ class LoginView extends AbstractComponent {
                                 minHeight: height * 0.8,
                                 paddingHorizontal: 48
                             }}>
-                                <Image source={{uri: `asset:/logo.png`}}
-                                       style={{height: 120, width: 120, alignSelf: 'center',}} resizeMode={'center'}/>
+                                <View style={{paddingVertical: 24}}><BrandLogos/></View>
                                 {this.renderMultiUserLoginFailure()}
                                 <Text style={{
                                     color: Colors.ValidationError,

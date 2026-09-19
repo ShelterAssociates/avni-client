@@ -1,4 +1,5 @@
-import {Alert, BackHandler, Image, NativeModules, Text, View, FlatList} from "react-native";
+import {Alert, BackHandler, NativeModules, Text, View, FlatList} from "react-native";
+import BrandLogos from "./views/common/BrandLogos";
 import PropTypes from 'prop-types';
 import React, {Component} from 'react';
 import PathRegistry from './framework/routing/PathRegistry';
@@ -124,8 +125,7 @@ class App extends Component {
         const message = `Upgrading Database. May take upto 15 minutes on slow devices with a lot of Avni data.`;
         return (
             <View style={{flex: 1, flexDirection: "column", alignItems: 'center', justifyContent: 'center'}}>
-                <Image source={{uri: `asset:/splash_logo.png`}}
-                       style={{height: 120, width: 320, alignSelf: 'center'}} resizeMode={'contain'}/>
+                <View style={{marginBottom: 24}}><BrandLogos height={48}/></View>
 
                 <KeepAwake/>
                 <Text style={{fontSize: 17, paddingHorizontal: 10, marginBottom: 20}}>{message}</Text>

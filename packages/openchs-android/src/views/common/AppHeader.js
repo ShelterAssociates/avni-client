@@ -70,7 +70,7 @@ class AppHeader extends AbstractComponent {
     renderBrand() {
         return (
             <View style={{flexDirection: 'row', alignItems: 'center', height: 56, paddingLeft: 16, paddingRight: 12, gap: 6}}>
-                <Image source={{uri: 'asset:/shelter-logo.png'}} style={{width: 106, height: 30}} resizeMode="contain"/>
+                <Image source={{uri: 'asset:/shelter-logo.png'}} style={{width: 70, height: 20}} resizeMode="contain"/>
                 <Text style={{color: Colors.headerTextColor, fontSize: 12, opacity: 0.85}}>× Avni</Text>
                 <View style={{width: 1, height: 24, backgroundColor: Colors.headerTextColor, opacity: 0.35, marginLeft: 6}}/>
             </View>

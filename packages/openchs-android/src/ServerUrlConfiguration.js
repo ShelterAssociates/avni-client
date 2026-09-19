@@ -1,6 +1,7 @@
 import React, { Component } from 'react';
-import { Image, Text, View, TextInput, TouchableOpacity } from 'react-native';
+import { Text, View, TextInput, TouchableOpacity } from 'react-native';
 import Colors from './views/primitives/Colors';
+import BrandLogos from './views/common/BrandLogos';
 const App = require('./App').default;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getJSON } from './framework/http/requests';
@@ -71,7 +72,7 @@ class ServerUrlConfiguration extends Component {
 
     renderURLConfigView = () => {
         return (<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Image source={{ uri: 'asset:/logo.png' }} style={{ height: 120, width: 120, alignSelf: 'center' }} resizeMode={'center'} />
+            <BrandLogos />
 
             <View style={{ paddingHorizontal: 48, marginTop: 20, width: '80%' }}>
                 <TextInput
