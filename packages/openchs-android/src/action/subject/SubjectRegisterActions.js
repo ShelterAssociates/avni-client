@@ -24,6 +24,7 @@ import TaskService from "../../service/task/TaskService";
 import General from '../../utility/General';
 import AddressLevelService from '../../service/AddressLevelService';
 import GisMappingQueue from '../../gis/GisMappingQueue';
+import {formatHouseholdNumber} from '../../gis/structureNumber';
 import {dispatchHandleNext} from "../common/DispatchHelpers";
 
 export class SubjectRegisterActions {
@@ -43,7 +44,7 @@ export class SubjectRegisterActions {
             SubjectRegisterActions.getOrCreateSubject(isNewEntity, action, context);
         // Shelter Associates GIS: the structure number picked on the map is the household's name.
         if (isNewEntity && _.get(action, 'mapStructure.structureId')) {
-            subject.setFirstName(String(action.mapStructure.structureId));
+            subject.setFirstName(formatHouseholdNumber(action.mapStructure.structureId));
         }
         const subjectType = subject.subjectType;
         const form = context.get(FormMappingService).findRegistrationForm(subjectType);

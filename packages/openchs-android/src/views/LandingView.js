@@ -32,7 +32,7 @@ import UserInfoService from "../service/UserInfoService";
 import Perf from "../utility/perf";
 import {CopilotProvider, CopilotStep, walkthroughable, useCopilot} from "react-native-copilot";
 import CopilotTooltip from "./common/CopilotTooltip";
-import {mapAvailable} from "../gis/mapBrowser";
+import {mapAvailableDuringRender} from "../gis/mapBrowser";
 import MapChoices, {openMap} from "./gis/MapChoices";
 
 const WalkthroughableView = walkthroughable(View);
@@ -332,7 +332,7 @@ class LandingView extends AbstractComponent {
     }
 
     renderMapButton() {
-        if (!mapAvailable(this.context)) return null;
+        if (!mapAvailableDuringRender(this)) return null;
         return (
             <View>
                 <TouchableOpacity style={LandingView.mapButtonStyle} onPress={() => openMap(this, open => this.setState({mapChoicesOpen: open}))}>

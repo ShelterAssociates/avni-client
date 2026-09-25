@@ -27,3 +27,15 @@ export function structureKey(value) {
 export function isBlankStructure(value) {
     return structureKey(value) === "";
 }
+
+// Avni stores house numbers zero-padded to 4 digits; the GIS server's are unpadded ("35", "22A").
+export function formatHouseholdNumber(value) {
+    if (value === null || value === undefined) return "";
+    const text = String(value).trim();
+    if (text === "") return "";
+    const match = /^(\d+)(.*)$/.exec(text);
+    if (!match) return text;
+    const digits = match[1].padStart(4, "0");
+    const suffix = match[2].trim();
+    return digits + suffix;
+}

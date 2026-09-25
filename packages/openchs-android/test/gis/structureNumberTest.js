@@ -1,5 +1,5 @@
 import {assert} from "chai";
-import {structureKey, STRUCTURE_KEY_SOURCE, isBlankStructure} from "../../src/gis/structureNumber";
+import {structureKey, STRUCTURE_KEY_SOURCE, isBlankStructure, formatHouseholdNumber} from "../../src/gis/structureNumber";
 
 describe("structureKey", () => {
     it("drops leading zeros from numeric ids", () => {
@@ -57,5 +57,39 @@ describe("structureKey", () => {
         const inWebView = new Function(`${hermesModule.STRUCTURE_KEY_SOURCE}; return structureKey;`)();
         assert.equal(inWebView("0035"), "35");
         assert.equal(inWebView("0022 A"), "22A");
+    });
+});
+
+describe("formatHouseholdNumber", () => {
+    it("pads a numeric house number to 4 digits", () => {
+        assert.equal(formatHouseholdNumber("1"), "0001");
+        assert.equal(formatHouseholdNumber("12"), "0012");
+        assert.equal(formatHouseholdNumber("123"), "0123");
+        assert.equal(formatHouseholdNumber("1234"), "1234");
+        assert.equal(formatHouseholdNumber(35), "0035");
+    });
+
+    it("pads the numeric part of a house number with a letter suffix", () => {
+        assert.equal(formatHouseholdNumber("1A"), "0001A");
+        assert.equal(formatHouseholdNumber("12A"), "0012A");
+        assert.equal(formatHouseholdNumber("123A"), "0123A");
+        assert.equal(formatHouseholdNumber("1234A"), "1234A");
+        assert.equal(formatHouseholdNumber("12B"), "0012B");
+    });
+
+    it("does not touch a number already at or beyond its padded width", () => {
+        assert.equal(formatHouseholdNumber("12345"), "12345");
+    });
+
+    it("leaves non-numeric ids alone", () => {
+        assert.equal(formatHouseholdNumber("R1"), "R1");
+        assert.equal(formatHouseholdNumber("plot-7"), "plot-7");
+    });
+
+    it("is empty for empty, null and undefined", () => {
+        assert.equal(formatHouseholdNumber(""), "");
+        assert.equal(formatHouseholdNumber("   "), "");
+        assert.equal(formatHouseholdNumber(null), "");
+        assert.equal(formatHouseholdNumber(undefined), "");
     });
 });

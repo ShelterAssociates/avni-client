@@ -6,6 +6,7 @@ import FormMappingService from "../service/FormMappingService";
 import PrivilegeService from "../service/PrivilegeService";
 import GroupSubjectService from "../service/GroupSubjectService";
 import CHSNavigator from "../utility/CHSNavigator";
+import Reducers from "../reducer";
 import {mapEntry} from "./mapEntry";
 
 export function registrableSubjectTypes(context) {
@@ -46,6 +47,14 @@ export function workListsFor({subjectType, program, label}, context) {
 
 export function mapAvailable(context) {
     return mapEntry(context.getService(AddressLevelService)).available && !_.isEmpty(registrableSubjectTypes(context));
+}
+
+// Querying rows a sync reset is deleting faults inside Realm's mmap, so answer from cache while syncing.
+export function mapAvailableDuringRender(view) {
+    const syncState = view.getContextState(Reducers.reducerKeys.syncComponentAction);
+    if (syncState && (syncState.syncing || syncState.backgroundSyncInProgress)) return view._mapAvailable === true;
+    view._mapAvailable = mapAvailable(view.context);
+    return view._mapAvailable;
 }
 
 // Browse the slum map for one registration choice; picking an empty house starts that registration.

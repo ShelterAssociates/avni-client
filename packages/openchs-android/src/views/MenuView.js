@@ -41,7 +41,7 @@ import EnvironmentConfig from "../framework/EnvironmentConfig";
 import GlobalContext from "../GlobalContext";
 import { getAvniError } from "../service/ServerError";
 import { AlertMessage } from "./common/AlertMessage";
-import {mapAvailable} from "../gis/mapBrowser";
+import {mapAvailableDuringRender} from "../gis/mapBrowser";
 import MapChoices, {openMap} from "./gis/MapChoices";
 import MessageService from "../service/MessageService";
 
@@ -342,7 +342,7 @@ class MenuView extends AbstractComponent {
 
         General.logDebug("MenuView", "render");
         const functionalityItems = this.getMenuItems(StaticMenuItemFactory.getFunctionalityMenus(this.beneficiaryModeStatus()), configuredMenuItems, MenuItem.FunctionalityGroupName);
-        if (mapAvailable(this.context)) {
+        if (mapAvailableDuringRender(this)) {
             functionalityItems.unshift(<MenuView.Item key="slumMap" I18n={this.I18n} icon={this.icon("map")} titleKey="slumMap"
                                                       onPress={() => openMap(this, open => this.setState({mapChoicesOpen: open}))}/>);
         }

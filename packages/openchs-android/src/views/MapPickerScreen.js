@@ -6,6 +6,8 @@ import AppHeader from './common/AppHeader';
 import AvniIcon from './common/AvniIcon';
 import Colors from './primitives/Colors';
 import RNFS from 'react-native-fs';
+import {SafeAreaInsetsContext} from 'react-native-safe-area-context';
+import {edgeToEdgeNavBarInset} from './primitives/Distances';
 import _ from 'lodash';
 import { Form, SubjectType } from 'avni-models';
 import AbstractComponent from '../framework/view/AbstractComponent';
@@ -81,6 +83,7 @@ class MapPickerScreen extends AbstractComponent {
             slumPickerOpen: false,
             filterOpen: false,
             showLabels: false,
+            showAllLabels: false,
             notice: null,            // one-line warning shown under the header
             duplicatePickerOpen: false,
             geojson: null,
@@ -319,10 +322,11 @@ class MapPickerScreen extends AbstractComponent {
         if (this.webViewRef.current) this.webViewRef.current.postMessage(JSON.stringify(message));
     }
 
-    toggleLabels() {
-        const showLabels = !this.state.showLabels;
-        this.setState({ showLabels });
-        this.post({ type: 'showLabels', show: showLabels });
+    // "all" numbers every house and wins over "filter" when both are ticked.
+    toggleLabels(key) {
+        const next = { showLabels: this.state.showLabels, showAllLabels: this.state.showAllLabels, [key]: !this.state[key] };
+        this.setState(next);
+        this.post({ type: 'showLabels', show: next.showLabels, all: next.showAllLabels });
     }
 
     clearSelection() {
@@ -538,16 +542,17 @@ function main() {
     }
 
     var showLabels = false;
+    var showAllLabels = false;
     function updateLabels() {
         labelLayers.forEach(function(l){ map.removeLayer(l); });
         labelLayers = [];
-        if (!showLabels || !geojson) return;
+        if ((!showLabels && !showAllLabels) || !geojson) return;
         var view = map.getBounds();
         geojson.features.forEach(function(feature) {
             var key = structureKey(String(feature.properties.s).trim());
             var layer = layerIndex[key];
             if (!layer) return;
-            if (filterActive ? (!answerByKey[key] || hiddenAnswers[answerByKey[key]]) : hiddenStatuses[statusOf(key)]) return;
+            if (!showAllLabels && (filterActive ? (!answerByKey[key] || hiddenAnswers[answerByKey[key]]) : hiddenStatuses[statusOf(key)])) return;
             var c = layer.getBounds().getCenter();
             if (!view.contains(c)) return;
             var lbl = L.marker(c, {
@@ -605,6 +610,7 @@ function main() {
             }
             if (data.type === 'showLabels') {
                 showLabels = data.show;
+                showAllLabels = data.all;
                 updateLabels();
             }
             if (data.type === 'clearSelection') clearSelection();
@@ -693,7 +699,8 @@ if (window.L) {
         const filterItems = [{ label: 'Survey status', value: STATUS_FILTER }, ...filters.map(f => ({ label: `${f.label} (${f.count})`, value: f.key }))];
         const dropdown = (props) => (
             <DropDownPicker
-                listMode="SCROLLVIEW" setValue={_.noop} arrowIconStyle={styles.dropdownArrow}
+                listMode="SCROLLVIEW" scrollViewProps={{ nestedScrollEnabled: true, showsVerticalScrollIndicator: true }}
+                setValue={_.noop} arrowIconStyle={styles.dropdownArrow}
                 style={styles.dropdown} textStyle={styles.dropdownText} dropDownContainerStyle={styles.dropdownList}
                 {...props}
             />
@@ -727,17 +734,20 @@ if (window.L) {
             ? answerLegend(answerColors)
             : statusLegend({ includeDuplicate: _.some(statusMap, entry => entry.status === STATUS.duplicate) });
         return (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.legendScroll} contentContainerStyle={styles.legendContent}>
-                <TouchableOpacity style={styles.legendItem} onPress={() => this.toggleLabels()}>
-                    <AvniIcon name={this.state.showLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
-                    <Text style={styles.legendText}>House numbers</Text>
+            <ScrollView showsVerticalScrollIndicator={true} style={styles.legendScroll} contentContainerStyle={styles.legendContent}>
+                <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showAllLabels')}>
+                    <AvniIcon name={this.state.showAllLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
+                    <Text style={styles.legendText}>All house numbers</Text>
                 </TouchableOpacity>
-                <View style={styles.legendDivider} />
+                <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showLabels')}>
+                    <AvniIcon name={this.state.showLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
+                    <Text style={styles.legendText}>Filter house numbers</Text>
+                </TouchableOpacity>
                 {rows.map(row => {
                     const toggles = activeFilter ? row.key !== 'noData' : _.includes(TOGGLABLE_STATUSES, row.key);
                     const hidden = toggles && _.includes(activeFilter ? this.state.hiddenAnswers : this.state.hiddenStatuses, row.key);
                     return (
-                        <TouchableOpacity key={row.key} style={styles.legendItem} disabled={!toggles} onPress={() => this.toggleLegendRow(row.key)}>
+                        <TouchableOpacity key={row.key} style={[styles.legendItem, styles.legendChip]} disabled={!toggles} onPress={() => this.toggleLegendRow(row.key)}>
                             <View style={[styles.swatch, hidden && styles.swatchHidden]}>
                                 <View style={[StyleSheet.absoluteFill, styles.swatchFill, !row.stripes && { backgroundColor: row.color }]}>
                                     {row.stripes && row.stripes.map((c, i) => <View key={i} style={{ flex: 1, backgroundColor: c }} />)}
@@ -781,32 +791,39 @@ if (window.L) {
 
     renderBottomBar() {
         const { selected, selectedEntry, browse } = this.state;
-        if (!selected) {
-            return (
-                <View style={styles.hintBar}>
-                    <Text style={styles.hintText}>Tap a structure on the map to {browse ? 'see who lives there' : 'select it'}</Text>
-                </View>
-            );
-        }
-        const isDuplicate = selectedEntry && selectedEntry.count > 1;
-        const label = isDuplicate ? `${selectedEntry.count} households registered here`
-            : selectedEntry ? 'Already registered' : browse ? 'Nobody registered here' : 'Selected structure';
-        const button = isDuplicate ? 'View households' : selectedEntry ? 'View household' : browse ? 'Register here' : 'Use this';
-        const icon = selectedEntry ? 'open-in-new' : 'add';
         return (
-            <View style={styles.confirmBar}>
-                {!this.state.household && this.renderClose()}
-                <View style={styles.confirmInfo}>
-                    <Text style={styles.confirmLabel}>{label}</Text>
-                    <Text style={styles.confirmId}>#{selected}</Text>
-                </View>
-                <TouchableOpacity
-                    style={[styles.confirmBtn, selectedEntry && styles.confirmBtnExisting, isDuplicate && styles.confirmBtnDuplicate]}
-                    onPress={() => this.onConfirmPressed()}>
-                    <Text style={styles.confirmBtnText}>{button}</Text>
-                    <AvniIcon name={icon} type="MaterialIcons" style={styles.confirmBtnIcon} />
-                </TouchableOpacity>
-            </View>
+            <SafeAreaInsetsContext.Consumer>
+                {(insets) => {
+                    const navBarPadding = { paddingBottom: 16 + edgeToEdgeNavBarInset(insets) };
+                    if (!selected) {
+                        return (
+                            <View style={[styles.hintBar, navBarPadding]}>
+                                <Text style={styles.hintText}>Tap a structure on the map to {browse ? 'see who lives there' : 'select it'}</Text>
+                            </View>
+                        );
+                    }
+                    const isDuplicate = selectedEntry && selectedEntry.count > 1;
+                    const label = isDuplicate ? `${selectedEntry.count} households registered here`
+                        : selectedEntry ? 'Already registered' : browse ? 'Nobody registered here' : 'Selected structure';
+                    const button = isDuplicate ? 'View households' : selectedEntry ? 'View household' : browse ? 'Register here' : 'Use this';
+                    const icon = selectedEntry ? 'open-in-new' : 'add';
+                    return (
+                        <View style={[styles.confirmBar, navBarPadding]}>
+                            {!this.state.household && this.renderClose()}
+                            <View style={styles.confirmInfo}>
+                                <Text style={styles.confirmLabel}>{label}</Text>
+                                <Text style={styles.confirmId}>#{selected}</Text>
+                            </View>
+                            <TouchableOpacity
+                                style={[styles.confirmBtn, selectedEntry && styles.confirmBtnExisting, isDuplicate && styles.confirmBtnDuplicate]}
+                                onPress={() => this.onConfirmPressed()}>
+                                <Text style={styles.confirmBtnText}>{button}</Text>
+                                <AvniIcon name={icon} type="MaterialIcons" style={styles.confirmBtnIcon} />
+                            </TouchableOpacity>
+                        </View>
+                    );
+                }}
+            </SafeAreaInsetsContext.Consumer>
         );
     }
 
@@ -902,18 +919,18 @@ const styles = StyleSheet.create({
     control: { flex: 1 },
     dropdown: { minHeight: 36, borderColor: Colors.InputBorderNormal, borderRadius: 4, backgroundColor: Colors.cardBackgroundColor },
     dropdownText: { fontSize: 13, color: Colors.DefaultPrimaryColor },
-    dropdownList: { borderColor: Colors.InputBorderNormal, backgroundColor: Colors.cardBackgroundColor, elevation: 8 },
+    dropdownList: { borderColor: Colors.InputBorderNormal, backgroundColor: Colors.cardBackgroundColor, elevation: 8, maxHeight: 240 },
     dropdownArrow: { tintColor: Colors.DefaultPrimaryColor },
-    legendScroll: { backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, maxHeight: 34 },
-    legendContent: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, gap: 12, alignItems: 'center' },
-    legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    legendScroll: { flexGrow: 0, backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, maxHeight: 140 },
+    legendContent: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+    legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    legendChip: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: Colors.InputBorderNormal, backgroundColor: Colors.GreyContentBackground },
     swatch: { width: 18, height: 18, borderRadius: 3, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
     swatchFill: { flexDirection: 'row' },
     swatchHidden: { opacity: 0.3 },
     swatchTick: { fontSize: 15, color: Colors.TextOnPrimaryColor, textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 2 },
     legendText: { fontSize: 11, color: Colors.DetailsTextColor },
     legendTextHidden: { color: Colors.SecondaryText, textDecorationLine: 'line-through' },
-    legendDivider: { width: 1, height: 16, backgroundColor: Colors.InputBorderNormal },
     checkbox: { fontSize: 18, color: Colors.AccentColor },
     panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     closeIcon: { fontSize: 22, color: Colors.SecondaryText },

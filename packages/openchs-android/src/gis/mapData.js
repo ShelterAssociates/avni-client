@@ -110,12 +110,13 @@ export async function buildFilterCatalog({concepts, subjects, statusMap, canView
     return {filters, table};
 }
 
-// The GIS server's admin-chosen filters (get_structures_for_avni "map_filters"), in its order; none chosen = every concept.
+// The GIS server's admin-chosen filters (get_structures_for_avni "map_filters") first, in its order, then the rest.
 function chosenConcepts(concepts, mapFilters) {
     if (_.isEmpty(mapFilters)) return concepts;
     const norm = text => _.toLower(_.trim(text));
-    return _.compact(mapFilters.map(({concept_uuid, concept_name}) =>
+    const chosen = _.compact(mapFilters.map(({concept_uuid, concept_name}) =>
         _.find(concepts, c => c.uuid === concept_uuid) || _.find(concepts, c => norm(c.name) === norm(concept_name))));
+    return _.uniqBy([...chosen, ...concepts], "uuid");
 }
 
 function conceptAnswerNames(concept, conceptService) {

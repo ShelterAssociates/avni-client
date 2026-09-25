@@ -53,11 +53,10 @@ describe("buildFilterCatalog", () => {
         assert.equal(filters[0].count, 1);
     });
 
-    it("offers only the concepts chosen on the GIS server, in the server's order, once any are chosen", async () => {
-        const OTHER = {uuid: "other-uuid", name: "Something else", datatype: Concept.dataType.Coded, answers: []};
+    it("puts the concepts chosen on the GIS server first and still offers the rest", async () => {
         const withOccupancy = [...subjects, subject("z", "0009", {[OCCUPANCY.uuid]: YES})];
-        const mapFilters = [{concept_uuid: OCCUPANCY.uuid, concept_name: OCCUPANCY.name}, {concept_uuid: TOILET.uuid, concept_name: TOILET.name}];
-        const {filters} = await buildFilterCatalog({concepts: [TOILET, OTHER, OCCUPANCY], subjects: withOccupancy, conceptService, statusMap, mapFilters});
+        const mapFilters = [{concept_uuid: OCCUPANCY.uuid, concept_name: OCCUPANCY.name}];
+        const {filters} = await buildFilterCatalog({concepts: [TOILET, OCCUPANCY], subjects: withOccupancy, conceptService, statusMap, mapFilters});
         assert.deepEqual(filters.filter(f => f.kind === "concept").map(f => f.key), [OCCUPANCY.uuid, TOILET.uuid]);
     });
 
