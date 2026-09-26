@@ -3,11 +3,10 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput,
 import { WebView } from 'react-native-webview';
 import DropDownPicker from 'react-native-dropdown-picker';
 import AppHeader from './common/AppHeader';
+import CHSContainer from './common/CHSContainer';
 import AvniIcon from './common/AvniIcon';
 import Colors from './primitives/Colors';
 import RNFS from 'react-native-fs';
-import {SafeAreaInsetsContext} from 'react-native-safe-area-context';
-import {edgeToEdgeNavBarInset} from './primitives/Distances';
 import _ from 'lodash';
 import { Form, SubjectType } from 'avni-models';
 import AbstractComponent from '../framework/view/AbstractComponent';
@@ -27,6 +26,7 @@ import EntitySyncStatusService from '../service/EntitySyncStatusService';
 import { structureKey, STRUCTURE_KEY_SOURCE } from '../gis/structureNumber';
 import { STATUS_COLORS, ANSWER_STYLE, BOUNDARY_STYLE, DUPLICATE_STRIPES, statusLegend, answerLegend } from '../gis/colorCoding';
 import { hasStructures, mapCenter } from '../gis/mapCenter';
+import { EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, structureKeys, validateExtraHouse } from '../gis/extraHouseholds';
 import { householdSummary } from '../gis/householdSummary';
 import {
     STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForms,
@@ -34,6 +34,11 @@ import {
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 const STATUS_FILTER = '__status__';
+const EXTRA_MESSAGES = {
+    [EXTRA_BLANK]: 'Type a house number.',
+    [EXTRA_ON_MAP]: 'That house is on the map — pick it there instead.',
+    [EXTRA_TAKEN]: 'A household is already registered on that number.',
+};
 const TOGGLABLE_STATUSES = ['notSurveyed', 'registered', 'duplicate'];  // selected/search are interaction states
 
 // Filter lists per slum for this session, keyed by what they were built from.
@@ -86,6 +91,11 @@ class MapPickerScreen extends AbstractComponent {
             showAllLabels: false,
             notice: null,            // one-line warning shown under the header
             duplicatePickerOpen: false,
+            extraMenuOpen: false,
+            extraListOpen: false,
+            extraPromptOpen: false,
+            extraNumber: '',
+            extraError: null,
             geojson: null,
             center: null,
             loading: true,
@@ -113,6 +123,30 @@ class MapPickerScreen extends AbstractComponent {
     componentDidMount() {
         Perf.mark('map.mounted', {sinceOpen: Date.now() - this.openedAt});
         this.loadLocalGeoJson();
+    }
+
+    componentWillUnmount() {
+        require('../utility/CHSNavigator').default.clearMapPickerCallback();
+        super.componentWillUnmount();
+    }
+
+    // Coming back from a registration: the map is still mounted, so re-read what is registered now.
+    didFocus() {
+        super.didFocus();
+        if (!this.focusedOnce) {
+            this.focusedOnce = true;
+            return;
+        }
+        if (this.state.geojson) this.refreshStatus();
+    }
+
+    refreshStatus() {
+        const statusMap = Perf.time('map.refreshStatus', () => buildStatusMap(this.subjectsInCurrentSlum()));
+        // Keep the cached page keyed to the new map so render does not rebuild the WebView and lose the view.
+        if (this.html) this.html.statusMap = statusMap;
+        const selectedEntry = this.state.selected ? statusMap[structureKey(this.state.selected)] || null : null;
+        this.setState({ statusMap, selectedEntry, household: this.summarise(selectedEntry) },
+            () => this.post({ type: 'updateStatus', statusMap }));
     }
 
     // House numbers are only unique within a slum, so everything is built from the households of
@@ -295,7 +329,8 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     // existingUuid: the household to open (chosen from the duplicate list when there are several).
-    // A household opens on top of the map so Back returns here; a registration replaces the map.
+    // Households and registrations both open on top of the map, so Back returns to the same slum,
+    // filter and selection the worker was exploring instead of unwinding to the register page.
     handleConfirm(existingUuid) {
         const { selected, selectedEntry, avniUuid } = this.state;
         const CHSNavigator = require('../utility/CHSNavigator').default;
@@ -305,8 +340,7 @@ class MapPickerScreen extends AbstractComponent {
             CHSNavigator.navigateToIndividualRegistrationDetails(this, uuid, null);
             return;
         }
-        TypedTransition.from(this).goBack();
-        setTimeout(() => CHSNavigator.invokeMapPickerCallback(selected, null, avniUuid), 300);
+        CHSNavigator.invokeMapPickerCallback(selected, null, avniUuid);
     }
 
     onConfirmPressed() {
@@ -345,6 +379,47 @@ class MapPickerScreen extends AbstractComponent {
         const key = structureKey(this.state.searchText);
         if (!key) return;
         this.post({ type: 'searchStructure', key });
+    }
+
+    searchSuggestions() {
+        const typed = structureKey(this.state.searchText);
+        if (!typed || this.state.selected === this.state.searchText) return [];
+        const seen = {};
+        return _(_.get(this.state.geojson, 'features', []))
+            .map(feature => String(_.get(feature, 'properties.s', '')).trim())
+            .filter(number => {
+                const key = structureKey(number);
+                if (!_.startsWith(key, typed) || seen[key]) return false;
+                seen[key] = true;
+                return true;
+            })
+            .sortBy(number => _.padStart(structureKey(number), 12, '0'))
+            .take(20)
+            .value();
+    }
+
+    pickSuggestion(number) {
+        this.setState({ searchText: number }, () => this.handleSearch());
+    }
+
+    renderSuggestions() {
+        const suggestions = this.searchSuggestions();
+        if (_.isEmpty(suggestions)) return null;
+        return (
+            <ScrollView style={styles.suggestions} keyboardShouldPersistTaps="handled" nestedScrollEnabled={true}>
+                {suggestions.map(number => {
+                    const entry = this.state.statusMap[structureKey(number)];
+                    return (
+                        <TouchableOpacity key={number} style={styles.suggestionRow} onPress={() => this.pickSuggestion(number)}>
+                            <Text style={styles.suggestionText}>#{number}</Text>
+                            <Text style={styles.suggestionMeta}>
+                                {entry ? (entry.count > 1 ? `${entry.count} households` : 'Registered') : 'Not surveyed'}
+                            </Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </ScrollView>
+        );
     }
 
     onWebViewMessage(event) {
@@ -613,6 +688,11 @@ function main() {
                 showAllLabels = data.all;
                 updateLabels();
             }
+            if (data.type === 'updateStatus') {
+                statusMap = data.statusMap;
+                refreshAll();
+                updateLabels();
+            }
             if (data.type === 'clearSelection') clearSelection();
             if (data.type === 'hideStatuses') {
                 hiddenStatuses = {};
@@ -648,6 +728,91 @@ if (window.L) {
 </script>
 </body>
 </html>`;
+    }
+
+    extrasNotOnMap() {
+        return extraHouseholds(this.state.statusMap, structureKeys(this.state.geojson));
+    }
+
+    addExtraHouse() {
+        const result = validateExtraHouse(this.state.extraNumber, this.state.statusMap, structureKeys(this.state.geojson));
+        if (!result.ok) {
+            this.setState({ extraError: EXTRA_MESSAGES[result.reason] });
+            return;
+        }
+        this.setState({ extraPromptOpen: false, extraNumber: '', extraError: null });
+        require('../utility/CHSNavigator').default.invokeMapPickerCallback(result.key, null, this.state.avniUuid, true);
+    }
+
+    renderExtraMenu() {
+        const extras = this.state.extraMenuOpen ? this.extrasNotOnMap() : [];
+        return this.renderPicker({
+            visible: this.state.extraMenuOpen,
+            title: 'Houses not on the map',
+            onClose: () => this.setState({ extraMenuOpen: false }),
+            rows: [
+                {
+                    key: 'add', label: 'Register extra house',
+                    subLabel: 'For a household whose number has no structure drawn',
+                    onPress: () => this.setState({ extraMenuOpen: false, extraPromptOpen: true, extraNumber: '', extraError: null }),
+                },
+                {
+                    key: 'list', label: `Extra households (${extras.length})`,
+                    subLabel: extras.length ? 'Registered but not drawn on the map' : 'None registered yet',
+                    onPress: () => this.setState({ extraMenuOpen: false, extraListOpen: extras.length > 0 }),
+                },
+            ],
+        });
+    }
+
+    renderExtraList() {
+        if (!this.state.extraListOpen) return null;
+        const individualService = this.context.getService(IndividualService);
+        const rows = _.flatMap(this.extrasNotOnMap(), entry => entry.uuids.map(uuid => {
+            const subject = individualService.findByUUID(uuid);
+            return {
+                key: uuid,
+                label: `#${entry.key} — ${subject ? subject.nameString : uuid}`,
+                subLabel: subject && subject.registrationDate ? `Registered ${General.formatDate(subject.registrationDate)}` : null,
+                onPress: () => {
+                    this.setState({ extraListOpen: false });
+                    require('../utility/CHSNavigator').default.navigateToIndividualRegistrationDetails(this, uuid, null);
+                },
+            };
+        }));
+        return this.renderPicker({
+            visible: true, title: 'Households not on the map', rows,
+            onClose: () => this.setState({ extraListOpen: false }),
+        });
+    }
+
+    renderExtraPrompt() {
+        if (!this.state.extraPromptOpen) return null;
+        const close = () => this.setState({ extraPromptOpen: false, extraError: null });
+        return (
+            <Modal transparent animationType="fade" onRequestClose={close}>
+                <View style={styles.pickerBackdrop}>
+                    <View style={styles.promptSheet}>
+                        <Text style={styles.pickerTitle}>Register a house that is not on the map</Text>
+                        <TextInput
+                            style={styles.promptInput}
+                            placeholder="House number"
+                            placeholderTextColor={Colors.SecondaryText}
+                            value={this.state.extraNumber}
+                            onChangeText={extraNumber => this.setState({ extraNumber, extraError: null })}
+                            keyboardType="numeric"
+                            autoFocus={true}
+                            onSubmitEditing={() => this.addExtraHouse()}
+                        />
+                        {this.state.extraError ? <Text style={styles.promptError}>{this.state.extraError}</Text> : null}
+                        <View style={styles.promptActions}>
+                            <TouchableOpacity onPress={close}><Text style={styles.promptCancel}>Cancel</Text></TouchableOpacity>
+                            <TouchableOpacity onPress={() => this.addExtraHouse()}><Text style={styles.promptOk}>Register</Text></TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+        );
     }
 
     renderPicker({ visible, title, rows, onClose }) {
@@ -699,7 +864,7 @@ if (window.L) {
         const filterItems = [{ label: 'Survey status', value: STATUS_FILTER }, ...filters.map(f => ({ label: `${f.label} (${f.count})`, value: f.key }))];
         const dropdown = (props) => (
             <DropDownPicker
-                listMode="SCROLLVIEW" scrollViewProps={{ nestedScrollEnabled: true, showsVerticalScrollIndicator: true }}
+                listMode="MODAL" modalProps={{ animationType: 'fade' }} modalContentContainerStyle={styles.dropdownModal}
                 setValue={_.noop} arrowIconStyle={styles.dropdownArrow}
                 style={styles.dropdown} textStyle={styles.dropdownText} dropDownContainerStyle={styles.dropdownList}
                 {...props}
@@ -712,17 +877,22 @@ if (window.L) {
                         {dropdown({
                             items: slums.map(slum => ({ label: slum.name, value: slum.uuid })), value: avniUuid, open: slumPickerOpen,
                             setOpen: open => this.setState({ slumPickerOpen: open, filterOpen: false }),
-                            onSelectItem: item => this.switchSlum(_.find(slums, { uuid: item.value })), zIndex: 3000, zIndexInverse: 1000,
+                            onSelectItem: item => this.switchSlum(_.find(slums, { uuid: item.value })),
+                            modalTitle: 'Slum', searchable: slums.length > 8, searchPlaceholder: 'Search slum',
                         })}
                     </View>
                 )}
                 <View style={styles.control}>
                     {dropdown({
-                        items: filterItems, value: activeFilter || STATUS_FILTER, open: filterOpen, searchable: filterItems.length > 8,
+                        items: filterItems, value: activeFilter || STATUS_FILTER, open: filterOpen, searchable: true,
                         setOpen: open => this.setState({ filterOpen: open, slumPickerOpen: false }),
-                        onSelectItem: item => this.selectFilter(_.find(filters, { key: item.value }) || null), zIndex: 2000, zIndexInverse: 2000,
+                        onSelectItem: item => this.selectFilter(_.find(filters, { key: item.value }) || null),
+                        modalTitle: 'Colour houses by', searchPlaceholder: 'Search filter',
                     })}
                 </View>
+                <TouchableOpacity style={styles.extraButton} onPress={() => this.setState({ extraMenuOpen: true })}>
+                    <AvniIcon name="home-plus-outline" type="MaterialCommunityIcons" style={styles.extraIcon} />
+                </TouchableOpacity>
             </View>
         );
     }
@@ -791,39 +961,32 @@ if (window.L) {
 
     renderBottomBar() {
         const { selected, selectedEntry, browse } = this.state;
+        if (!selected) {
+            return (
+                <View style={styles.hintBar}>
+                    <Text style={styles.hintText}>Tap a structure on the map to {browse ? 'see who lives there' : 'select it'}</Text>
+                </View>
+            );
+        }
+        const isDuplicate = selectedEntry && selectedEntry.count > 1;
+        const label = isDuplicate ? `${selectedEntry.count} households registered here`
+            : selectedEntry ? 'Already registered' : browse ? 'Nobody registered here' : 'Selected structure';
+        const button = isDuplicate ? 'View households' : selectedEntry ? 'View household' : browse ? 'Register here' : 'Use this';
+        const icon = selectedEntry ? 'open-in-new' : 'add';
         return (
-            <SafeAreaInsetsContext.Consumer>
-                {(insets) => {
-                    const navBarPadding = { paddingBottom: 16 + edgeToEdgeNavBarInset(insets) };
-                    if (!selected) {
-                        return (
-                            <View style={[styles.hintBar, navBarPadding]}>
-                                <Text style={styles.hintText}>Tap a structure on the map to {browse ? 'see who lives there' : 'select it'}</Text>
-                            </View>
-                        );
-                    }
-                    const isDuplicate = selectedEntry && selectedEntry.count > 1;
-                    const label = isDuplicate ? `${selectedEntry.count} households registered here`
-                        : selectedEntry ? 'Already registered' : browse ? 'Nobody registered here' : 'Selected structure';
-                    const button = isDuplicate ? 'View households' : selectedEntry ? 'View household' : browse ? 'Register here' : 'Use this';
-                    const icon = selectedEntry ? 'open-in-new' : 'add';
-                    return (
-                        <View style={[styles.confirmBar, navBarPadding]}>
-                            {!this.state.household && this.renderClose()}
-                            <View style={styles.confirmInfo}>
-                                <Text style={styles.confirmLabel}>{label}</Text>
-                                <Text style={styles.confirmId}>#{selected}</Text>
-                            </View>
-                            <TouchableOpacity
-                                style={[styles.confirmBtn, selectedEntry && styles.confirmBtnExisting, isDuplicate && styles.confirmBtnDuplicate]}
-                                onPress={() => this.onConfirmPressed()}>
-                                <Text style={styles.confirmBtnText}>{button}</Text>
-                                <AvniIcon name={icon} type="MaterialIcons" style={styles.confirmBtnIcon} />
-                            </TouchableOpacity>
-                        </View>
-                    );
-                }}
-            </SafeAreaInsetsContext.Consumer>
+            <View style={styles.confirmBar}>
+                {!this.state.household && this.renderClose()}
+                <View style={styles.confirmInfo}>
+                    <Text style={styles.confirmLabel}>{label}</Text>
+                    <Text style={styles.confirmId}>#{selected}</Text>
+                </View>
+                <TouchableOpacity
+                    style={[styles.confirmBtn, selectedEntry && styles.confirmBtnExisting, isDuplicate && styles.confirmBtnDuplicate]}
+                    onPress={() => this.onConfirmPressed()}>
+                    <Text style={styles.confirmBtnText}>{button}</Text>
+                    <AvniIcon name={icon} type="MaterialIcons" style={styles.confirmBtnIcon} />
+                </TouchableOpacity>
+            </View>
         );
     }
 
@@ -840,7 +1003,7 @@ if (window.L) {
         }
 
         return (
-            <View style={styles.container}>
+            <CHSContainer style={styles.container}>
                 <AppHeader title={slumName || 'Slum map'} func={() => this.goBack()} hideIcon={true} />
                 {notice && (
                     <TouchableOpacity style={styles.notice} onPress={() => this.setState({ notice: null })}>
@@ -850,6 +1013,9 @@ if (window.L) {
                 )}
 
                 {this.renderDuplicatePicker()}
+                {this.renderExtraMenu()}
+                {this.renderExtraList()}
+                {this.renderExtraPrompt()}
 
                 <View style={styles.searchBar}>
                     <AvniIcon name="search" type="MaterialIcons" style={styles.searchIcon} />
@@ -870,6 +1036,7 @@ if (window.L) {
                     )}
                 </View>
 
+                {this.renderSuggestions()}
                 {this.renderControls()}
                 {this.renderLegend()}
 
@@ -900,7 +1067,7 @@ if (window.L) {
 
                 {this.renderHouseholdCard()}
                 {this.renderBottomBar()}
-            </View>
+            </CHSContainer>
         );
     }
 }
@@ -920,6 +1087,11 @@ const styles = StyleSheet.create({
     dropdown: { minHeight: 36, borderColor: Colors.InputBorderNormal, borderRadius: 4, backgroundColor: Colors.cardBackgroundColor },
     dropdownText: { fontSize: 13, color: Colors.DefaultPrimaryColor },
     dropdownList: { borderColor: Colors.InputBorderNormal, backgroundColor: Colors.cardBackgroundColor, elevation: 8, maxHeight: 240 },
+    dropdownModal: { backgroundColor: Colors.cardBackgroundColor },
+    suggestions: { flexGrow: 0, maxHeight: 180, backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal },
+    suggestionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal },
+    suggestionText: { fontSize: 15, color: Colors.DefaultPrimaryColor },
+    suggestionMeta: { fontSize: 12, color: Colors.SecondaryText },
     dropdownArrow: { tintColor: Colors.DefaultPrimaryColor },
     legendScroll: { flexGrow: 0, backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, maxHeight: 140 },
     legendContent: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
@@ -957,6 +1129,14 @@ const styles = StyleSheet.create({
     hintBar: { backgroundColor: Colors.cardBackgroundColor, padding: 16, alignItems: 'center', borderTopWidth: 1, borderTopColor: Colors.InputBorderNormal },
     hintText: { color: Colors.SecondaryText, fontSize: 14 },
     pickerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+    extraButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+    extraIcon: { fontSize: 24, color: Colors.AccentColor },
+    promptSheet: { backgroundColor: Colors.cardBackgroundColor, borderRadius: 8, padding: 16, marginHorizontal: 24 },
+    promptInput: { borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, fontSize: 16, color: Colors.DefaultPrimaryColor, paddingVertical: 6 },
+    promptError: { color: Colors.ValidationError, fontSize: 12, marginTop: 8 },
+    promptActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 24, marginTop: 16 },
+    promptCancel: { fontSize: 14, color: Colors.SecondaryText },
+    promptOk: { fontSize: 14, color: Colors.AccentColor, fontWeight: 'bold' },
     pickerSheet: { backgroundColor: Colors.cardBackgroundColor, borderRadius: 8, maxHeight: '70%', paddingVertical: 8 },
     pickerTitle: { fontSize: 16, fontWeight: '600', color: Colors.DefaultPrimaryColor, paddingHorizontal: 16, paddingVertical: 8 },
     pickerRow: { paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: Colors.InputBorderNormal },

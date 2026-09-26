@@ -28,6 +28,7 @@ import ContextAction from "./viewmodel/ContextAction";
 import ObservationsSectionOptions from "./common/ObservationsSectionOptions";
 import {mapEntry} from "../gis/mapEntry";
 import {registrationChoices, workListsFor} from "../gis/mapBrowser";
+import {loadMapRegistrationSubjectTypes, registrationUsesMap} from "../gis/mapRegistrationForms";
 
 class RegisterView extends AbstractComponent {
     static propTypes = {
@@ -39,11 +40,12 @@ class RegisterView extends AbstractComponent {
     constructor(props, context) {
         super(props, context);
         this.userSettings = context.getService(UserInfoService).getUserSettings();
-        this.state = {};
+        this.state = {mapRegistrationSubjectTypes: null};
     }
 
     UNSAFE_componentWillMount() {
         super.UNSAFE_componentWillMount();
+        loadMapRegistrationSubjectTypes().then(names => this.setState({mapRegistrationSubjectTypes: names}));
     }
 
     _action(choice) {
@@ -61,13 +63,13 @@ class RegisterView extends AbstractComponent {
     // (the structure number and the Avni uuid of the slum whose map it was picked from) or null.
     _navigateViaMap(subjectType, navigateToForm) {
         const {slums} = mapEntry(this.context.getService(AddressLevelService));
-        if (_.isEmpty(slums)) {
+        if (_.isEmpty(slums) || !registrationUsesMap(subjectType.name, this.state.mapRegistrationSubjectTypes)) {
             navigateToForm(null);
             return;
         }
         const picker = {slums, initialSlumUuid: slums[0].uuid, subjectTypeName: subjectType.name};
         this.setState({openingMap: true}, () => {
-            CHSNavigator.navigateToMapPicker(this, picker, (structureId, _existingUuid, slumUuid) => navigateToForm(structureId ? {structureId, slumUuid} : null));
+            CHSNavigator.navigateToMapPicker(this, picker, (structureId, _existingUuid, slumUuid, extra) => navigateToForm(structureId ? {structureId, slumUuid, extra} : null));
             InteractionManager.runAfterInteractions(() => this.setState({openingMap: false}));
         });
     }

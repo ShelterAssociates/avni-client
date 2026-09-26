@@ -727,12 +727,16 @@ class CHSNavigator {
             .to(MapPickerScreen, true);
     }
 
-    static invokeMapPickerCallback(structureId, existingUuid, slumUuid) {
+    static invokeMapPickerCallback(structureId, existingUuid, slumUuid, extra = false) {
         _pendingStructureId = structureId;
         if (_mapPickerCallback) {
-            _mapPickerCallback(structureId, existingUuid, slumUuid);
-            _mapPickerCallback = null;
+            _mapPickerCallback(structureId, existingUuid, slumUuid, extra);
         }
+    }
+
+    // The map stays on the stack while the worker fills a form, so the callback lives until it closes.
+    static clearMapPickerCallback() {
+        _mapPickerCallback = null;
     }
 
     static getPendingStructureId() {

@@ -190,7 +190,7 @@ export class SubjectRegisterActions {
     // belongs to. Queued on disk and sent when possible (now, and after each sync); never
     // blocks or fails the registration save.
     static recordStructureMapping(subjectUuid, mapStructure) {
-        if (!_.get(mapStructure, 'structureId')) return;
+        if (!_.get(mapStructure, 'structureId') || _.get(mapStructure, 'extra')) return;
         GisMappingQueue.record({subjectUuid, structureId: mapStructure.structureId, slumUuid: mapStructure.slumUuid});
     }
 

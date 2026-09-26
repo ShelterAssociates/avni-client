@@ -3,6 +3,7 @@ import General from '../utility/General';
 import GisConfig from '../gis/GisConfig';
 import {keepsMoreMapData} from '../gis/gisFile';
 import GisMappingQueue from '../gis/GisMappingQueue';
+import {saveMapRegistrationSubjectTypes} from '../gis/mapRegistrationForms';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
@@ -61,6 +62,7 @@ class GisSyncService {
                 return false;
             }
             await RNFS.writeFile(destPath, text, 'utf8');
+            await saveMapRegistrationSubjectTypes(next.map_registration_subject_types);
             General.logInfo('GisSyncService', `GIS saved for ${slumName}: ${(next.features || []).length} structures, boundary ${next.boundary ? 'yes' : 'no'}`);
             return true;
         } catch (e) {

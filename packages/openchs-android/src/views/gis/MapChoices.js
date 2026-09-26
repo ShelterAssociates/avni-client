@@ -4,17 +4,21 @@ import Colors from '../primitives/Colors';
 import AvniIcon from '../common/AvniIcon';
 import UserInfoService from '../../service/UserInfoService';
 import {openMapBrowser, registrationChoices} from '../../gis/mapBrowser';
+import {choicesUsingMap, loadMapRegistrationSubjectTypes} from '../../gis/mapRegistrationForms';
 
 // "What are you filling?" — the Register page's forms, so the map opens for the right subject type.
 export function openMap(source, setOpen) {
-    const choices = choicesFor(source);
-    if (choices.length === 1) openMapBrowser(source, choices[0]);
-    else setOpen(true);
+    loadMapRegistrationSubjectTypes().then(() => {
+        const choices = choicesFor(source);
+        if (choices.length === 0) return;
+        if (choices.length === 1) openMapBrowser(source, choices[0]);
+        else setOpen(true);
+    });
 }
 
 function choicesFor(source) {
     const registerEnrol = source.context.getService(UserInfoService).getUserSettings().registerEnrol;
-    return registrationChoices(source.context, source.I18n, registerEnrol);
+    return choicesUsingMap(registrationChoices(source.context, source.I18n, registerEnrol));
 }
 
 export default function MapChoices({source, visible, onClose, anchor = 'center'}) {

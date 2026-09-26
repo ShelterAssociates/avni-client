@@ -8,6 +8,7 @@ import GroupSubjectService from "../service/GroupSubjectService";
 import CHSNavigator from "../utility/CHSNavigator";
 import Reducers from "../reducer";
 import {mapEntry} from "./mapEntry";
+import {ensureMapRegistrationSubjectTypes, mapRegistrationSubjectTypes, registrationUsesMap} from "./mapRegistrationForms";
 
 export function registrableSubjectTypes(context) {
     const privilegeService = context.getService(PrivilegeService);
@@ -46,13 +47,18 @@ export function workListsFor({subjectType, program, label}, context) {
 }
 
 export function mapAvailable(context) {
-    return mapEntry(context.getService(AddressLevelService)).available && !_.isEmpty(registrableSubjectTypes(context));
+    return mapEntry(context.getService(AddressLevelService)).available
+        && _.some(registrableSubjectTypes(context), ({name}) => registrationUsesMap(name, mapRegistrationSubjectTypes()));
 }
 
 // Querying rows a sync reset is deleting faults inside Realm's mmap, so answer from cache while syncing.
 export function mapAvailableDuringRender(view) {
     const syncState = view.getContextState(Reducers.reducerKeys.syncComponentAction);
     if (syncState && (syncState.syncing || syncState.backgroundSyncInProgress)) return view._mapAvailable === true;
+    if (_.isNil(mapRegistrationSubjectTypes())) {
+        ensureMapRegistrationSubjectTypes(() => view.setState({}));
+        return false;
+    }
     view._mapAvailable = mapAvailable(view.context);
     return view._mapAvailable;
 }
@@ -62,6 +68,6 @@ export function openMapBrowser(source, choice) {
     const {context} = source;
     const {slums} = mapEntry(context.getService(AddressLevelService));
     CHSNavigator.navigateToMapPicker(source, {slums, initialSlumUuid: slums[0].uuid, subjectTypeName: choice.subjectType.name, mode: 'browse'},
-        (structureId, _existingUuid, slumUuid) =>
-            CHSNavigator.navigateToRegisterView(source, {mapStructure: structureId ? {structureId, slumUuid} : null, workLists: workListsFor(choice, context)}));
+        (structureId, _existingUuid, slumUuid, extra) =>
+            CHSNavigator.navigateToRegisterView(source, {mapStructure: structureId ? {structureId, slumUuid, extra} : null, workLists: workListsFor(choice, context)}));
 }
