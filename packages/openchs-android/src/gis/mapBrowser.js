@@ -52,14 +52,21 @@ export function mapAvailable(context) {
 }
 
 // Querying rows a sync reset is deleting faults inside Realm's mmap, so answer from cache while syncing.
+// The home screen re-renders on every sync message, so the answer is also kept until a sync can change it.
 export function mapAvailableDuringRender(view) {
     const syncState = view.getContextState(Reducers.reducerKeys.syncComponentAction);
-    if (syncState && (syncState.syncing || syncState.backgroundSyncInProgress)) return view._mapAvailable === true;
+    if (syncState && (syncState.syncing || syncState.backgroundSyncInProgress)) {
+        view._mapAvailableStale = true;
+        return view._mapAvailable === true;
+    }
     if (_.isNil(mapRegistrationSubjectTypes())) {
         ensureMapRegistrationSubjectTypes(() => view.setState({}));
         return false;
     }
-    view._mapAvailable = mapAvailable(view.context);
+    if (_.isNil(view._mapAvailable) || view._mapAvailableStale) {
+        view._mapAvailable = mapAvailable(view.context);
+        view._mapAvailableStale = false;
+    }
     return view._mapAvailable;
 }
 

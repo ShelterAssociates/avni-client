@@ -1,17 +1,8 @@
 import {assert} from "chai";
-import {
-    EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, structureKeys, validateExtraHouse,
-} from "../../src/gis/extraHouseholds";
+import {EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, validateExtraHouse} from "../../src/gis/extraHouseholds";
 
-const geojson = {features: [{properties: {s: "0001"}}, {properties: {s: "2"}}, {properties: {s: "0022 A"}}]};
-const onMap = structureKeys(geojson);
+const onMap = ["1", "2", "22A"];
 const statusMap = {"1": {uuids: ["a"], count: 1}, "99": {uuids: ["b"], count: 1}, "100A": {uuids: ["c"], count: 1}};
-
-describe("structureKeys", () => {
-    it("normalises every house number the map draws", () => {
-        assert.deepEqual(onMap, ["1", "2", "22A"]);
-    });
-});
 
 describe("extraHouseholds", () => {
     it("lists only households whose number is not a structure", () => {

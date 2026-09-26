@@ -26,7 +26,7 @@ import EntitySyncStatusService from '../service/EntitySyncStatusService';
 import { structureKey, STRUCTURE_KEY_SOURCE } from '../gis/structureNumber';
 import { STATUS_COLORS, ANSWER_STYLE, BOUNDARY_STYLE, DUPLICATE_STRIPES, statusLegend, answerLegend } from '../gis/colorCoding';
 import { hasStructures, mapCenter } from '../gis/mapCenter';
-import { EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, structureKeys, validateExtraHouse } from '../gis/extraHouseholds';
+import { EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, validateExtraHouse } from '../gis/extraHouseholds';
 import { householdSummary } from '../gis/householdSummary';
 import {
     STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForms,
@@ -141,12 +141,24 @@ class MapPickerScreen extends AbstractComponent {
     }
 
     refreshStatus() {
-        const statusMap = Perf.time('map.refreshStatus', () => buildStatusMap(this.subjectsInCurrentSlum()));
+        const subjects = this.subjectsInCurrentSlum();
+        const statusMap = Perf.time('map.refreshStatus', () => buildStatusMap(subjects));
         // Keep the cached page keyed to the new map so render does not rebuild the WebView and lose the view.
         if (this.html) this.html.statusMap = statusMap;
         const selectedEntry = this.state.selected ? statusMap[structureKey(this.state.selected)] || null : null;
-        this.setState({ statusMap, selectedEntry, household: this.summarise(selectedEntry) },
-            () => this.post({ type: 'updateStatus', statusMap }));
+        this.setState({ statusMap, selectedEntry, household: this.summarise(selectedEntry) }, () => {
+            this.post({ type: 'updateStatus', statusMap });
+            this.refreshFilters(subjects, statusMap);
+        });
+    }
+
+    // A household registered just now also changes the filter counts and its own answers.
+    async refreshFilters(subjects, statusMap) {
+        const active = this.state.activeFilter;
+        const catalog = await this.loadFilters(subjects, statusMap);
+        if (!catalog || !active || active === STATUS_FILTER) return;
+        const filter = _.find(catalog.filters, { key: active });
+        if (filter) this.selectFilter(filter);
     }
 
     // House numbers are only unique within a slum, so everything is built from the households of
@@ -195,7 +207,7 @@ class MapPickerScreen extends AbstractComponent {
             this.context.getService(EntitySyncStatusService).getLastLoaded()].join('|');
         if (filterCatalogs[cacheKey]) {
             this.setState(filterCatalogs[cacheKey]);
-            return;
+            return filterCatalogs[cacheKey];
         }
         try {
             const t0 = Date.now();
@@ -216,6 +228,7 @@ class MapPickerScreen extends AbstractComponent {
             Perf.mark('map.filterCatalog', {ms: Date.now() - t0, filters: catalog.filters.length});
             filterCatalogs[cacheKey] = catalog;
             if (this.state.avniUuid === avniUuid) this.setState(catalog);
+            return catalog;
         } catch (e) {
             General.logError('MapPickerScreen', e);
         }
@@ -381,19 +394,30 @@ class MapPickerScreen extends AbstractComponent {
         this.post({ type: 'searchStructure', key });
     }
 
+    // Rebuilt only when the slum file changes; render and validation both read it many times.
+    structureNumbers() {
+        if (this._numbersFor !== this.state.geojson) {
+            this._numbersFor = this.state.geojson;
+            this._numbers = _(_.get(this.state.geojson, 'features', []))
+                .map(feature => String(_.get(feature, 'properties.s', '')).trim())
+                .uniqBy(structureKey)
+                .sortBy(number => _.padStart(structureKey(number), 12, '0'))
+                .value();
+            this._keys = this._numbers.map(structureKey);
+        }
+        return this._numbers;
+    }
+
+    structureKeyList() {
+        this.structureNumbers();
+        return this._keys;
+    }
+
     searchSuggestions() {
         const typed = structureKey(this.state.searchText);
         if (!typed || this.state.selected === this.state.searchText) return [];
-        const seen = {};
-        return _(_.get(this.state.geojson, 'features', []))
-            .map(feature => String(_.get(feature, 'properties.s', '')).trim())
-            .filter(number => {
-                const key = structureKey(number);
-                if (!_.startsWith(key, typed) || seen[key]) return false;
-                seen[key] = true;
-                return true;
-            })
-            .sortBy(number => _.padStart(structureKey(number), 12, '0'))
+        return _(this.structureNumbers())
+            .filter(number => _.startsWith(structureKey(number), typed))
             .take(20)
             .value();
     }
@@ -731,11 +755,11 @@ if (window.L) {
     }
 
     extrasNotOnMap() {
-        return extraHouseholds(this.state.statusMap, structureKeys(this.state.geojson));
+        return extraHouseholds(this.state.statusMap, this.structureKeyList());
     }
 
     addExtraHouse() {
-        const result = validateExtraHouse(this.state.extraNumber, this.state.statusMap, structureKeys(this.state.geojson));
+        const result = validateExtraHouse(this.state.extraNumber, this.state.statusMap, this.structureKeyList());
         if (!result.ok) {
             this.setState({ extraError: EXTRA_MESSAGES[result.reason] });
             return;
@@ -800,7 +824,7 @@ if (window.L) {
                             placeholderTextColor={Colors.SecondaryText}
                             value={this.state.extraNumber}
                             onChangeText={extraNumber => this.setState({ extraNumber, extraError: null })}
-                            keyboardType="numeric"
+                            autoCapitalize="characters"
                             autoFocus={true}
                             onSubmitEditing={() => this.addExtraHouse()}
                         />
@@ -1025,7 +1049,7 @@ if (window.L) {
                         placeholderTextColor={Colors.SecondaryText}
                         value={searchText}
                         onChangeText={(text) => this.setState({ searchText: text })}
-                        keyboardType="numeric"
+                        autoCapitalize="characters"
                         returnKeyType="search"
                         onSubmitEditing={() => this.handleSearch()}
                     />

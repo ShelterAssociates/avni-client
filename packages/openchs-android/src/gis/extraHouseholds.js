@@ -5,10 +5,6 @@ export const EXTRA_BLANK = "blank";
 export const EXTRA_ON_MAP = "onMap";
 export const EXTRA_TAKEN = "taken";
 
-export function structureKeys(geojson) {
-    return _.map(_.get(geojson, "features", []), feature => structureKey(_.get(feature, "properties.s")));
-}
-
 // Households of this slum whose number matches no structure, so the map can never show them.
 export function extraHouseholds(statusMap, keysOnMap) {
     const onMap = new Set(keysOnMap);
