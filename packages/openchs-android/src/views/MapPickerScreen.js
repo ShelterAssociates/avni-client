@@ -32,6 +32,7 @@ import { EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, validateExtraH
 import { householdSummary, recentHouseholds } from '../gis/householdSummary';
 import {
     STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForms,
+    statusCounts, answerCounts,
 } from '../gis/mapData';
 
 const STATUS_FILTER = '__status__';
@@ -41,6 +42,7 @@ const EXTRA_MESSAGES = {
     [EXTRA_TAKEN]: 'A household is already registered on that number.',
 };
 const TOGGLABLE_STATUSES = ['notSurveyed', 'registered', 'duplicate'];  // selected/search are interaction states
+const UNTOGGLABLE_FILTER_ROWS = ['noData', 'filteredOut'];  // greys the page colours by absence, not by label
 
 // Filter lists per slum for this session, keyed by what they were built from.
 const filterCatalogs = {};
@@ -99,6 +101,7 @@ class MapPickerScreen extends AbstractComponent {
             showLabels: false,
             showAllLabels: false,
             notice: null,            // one-line warning shown under the header
+            legendOpen: true,        // collapsed on demand, to give the map the strip back
             duplicatePickerOpen: false,
             extraMenuOpen: false,
             extraListOpen: false,
@@ -979,38 +982,62 @@ if (window.L) {
         );
     }
 
-    // Always derived from what the active filter actually computed (answerColors) or the status set.
+    // Derived from what the active filter actually computed (answerColors) or the status set, with
+    // one count per category. Rebuilt only when the map, the filter or what is registered changes:
+    // counting walks every structure, and render does not.
+    legendRows() {
+        const { activeFilter, answerColors, answerByKey, statusMap, geojson } = this.state;
+        const signature = [activeFilter, answerColors, answerByKey, statusMap, geojson];
+        if (!this._legendFor || _.some(signature, (value, i) => this._legendFor[i] !== value)) {
+            this._legendFor = signature;
+            const keysOnMap = this.structureKeyList();
+            this._legendRows = activeFilter
+                ? answerLegend(answerColors, answerCounts(answerByKey, statusMap, keysOnMap))
+                : statusLegend({ counts: statusCounts(statusMap, keysOnMap) });
+        }
+        return this._legendRows;
+    }
+
     renderLegend() {
-        const { activeFilter, answerColors, statusMap } = this.state;
-        const rows = activeFilter
-            ? answerLegend(answerColors)
-            : statusLegend({ includeDuplicate: _.some(statusMap, entry => entry.status === STATUS.duplicate) });
+        const { activeFilter, legendOpen } = this.state;
+        const rows = this.legendRows();
+        const categories = _.filter(rows, row => _.isNumber(row.count)).length;
         return (
-            <ScrollView showsVerticalScrollIndicator={true} style={styles.legendScroll} contentContainerStyle={styles.legendContent}>
-                <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showAllLabels')}>
-                    <AvniIcon name={this.state.showAllLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
-                    <Text style={styles.legendText}>All house numbers</Text>
+            <View style={styles.legend}>
+                <TouchableOpacity style={styles.legendBar} onPress={() => this.setState({ legendOpen: !legendOpen })}>
+                    <Text style={styles.legendBarText}>Legend · {categories} {categories === 1 ? 'category' : 'categories'}</Text>
+                    <AvniIcon name={legendOpen ? 'expand-less' : 'expand-more'} type="MaterialIcons" style={styles.legendBarIcon} />
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showLabels')}>
-                    <AvniIcon name={this.state.showLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
-                    <Text style={styles.legendText}>Filter house numbers</Text>
-                </TouchableOpacity>
-                {rows.map(row => {
-                    const toggles = activeFilter ? row.key !== 'noData' : _.includes(TOGGLABLE_STATUSES, row.key);
-                    const hidden = toggles && _.includes(activeFilter ? this.state.hiddenAnswers : this.state.hiddenStatuses, row.key);
-                    return (
-                        <TouchableOpacity key={row.key} style={[styles.legendItem, styles.legendChip]} disabled={!toggles} onPress={() => this.toggleLegendRow(row.key)}>
-                            <View style={[styles.swatch, hidden && styles.swatchHidden]}>
-                                <View style={[StyleSheet.absoluteFill, styles.swatchFill, !row.stripes && { backgroundColor: row.color }]}>
-                                    {row.stripes && row.stripes.map((c, i) => <View key={i} style={{ flex: 1, backgroundColor: c }} />)}
-                                </View>
-                                {toggles && !hidden && <AvniIcon name="check" type="MaterialIcons" style={styles.swatchTick} />}
-                            </View>
-                            <Text style={[styles.legendText, hidden && styles.legendTextHidden]}>{row.label}</Text>
+                {legendOpen && (
+                    <ScrollView showsVerticalScrollIndicator={true} style={styles.legendScroll} contentContainerStyle={styles.legendContent}>
+                        <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showAllLabels')}>
+                            <AvniIcon name={this.state.showAllLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
+                            <Text style={styles.legendText}>All house numbers</Text>
                         </TouchableOpacity>
-                    );
-                })}
-            </ScrollView>
+                        <TouchableOpacity style={[styles.legendItem, styles.legendChip]} onPress={() => this.toggleLabels('showLabels')}>
+                            <AvniIcon name={this.state.showLabels ? 'check-box' : 'check-box-outline-blank'} type="MaterialIcons" style={styles.checkbox} />
+                            <Text style={styles.legendText}>Filter house numbers</Text>
+                        </TouchableOpacity>
+                        {rows.map(row => {
+                            const toggles = activeFilter ? !_.includes(UNTOGGLABLE_FILTER_ROWS, row.key) : _.includes(TOGGLABLE_STATUSES, row.key);
+                            const hidden = toggles && _.includes(activeFilter ? this.state.hiddenAnswers : this.state.hiddenStatuses, row.key);
+                            return (
+                                <TouchableOpacity key={row.key} style={[styles.legendItem, styles.legendChip]} disabled={!toggles} onPress={() => this.toggleLegendRow(row.key)}>
+                                    <View style={[styles.swatch, hidden && styles.swatchHidden]}>
+                                        <View style={[StyleSheet.absoluteFill, styles.swatchFill, !row.stripes && { backgroundColor: row.color }]}>
+                                            {row.stripes && row.stripes.map((c, i) => <View key={i} style={{ flex: 1, backgroundColor: c }} />)}
+                                        </View>
+                                        {toggles && !hidden && <AvniIcon name="check" type="MaterialIcons" style={styles.swatchTick} />}
+                                    </View>
+                                    <Text style={[styles.legendText, hidden && styles.legendTextHidden]}>
+                                        {row.label}{_.isNumber(row.count) ? ` (${row.count})` : ''}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
+                )}
+            </View>
         );
     }
 
@@ -1191,8 +1218,12 @@ const styles = StyleSheet.create({
     suggestionText: { fontSize: 15, color: Colors.DefaultPrimaryColor },
     suggestionMeta: { fontSize: 12, color: Colors.SecondaryText },
     dropdownArrow: { tintColor: Colors.DefaultPrimaryColor },
-    legendScroll: { flexGrow: 0, backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, maxHeight: 140 },
-    legendContent: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+    legend: { backgroundColor: Colors.cardBackgroundColor, borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal },
+    legendBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 4 },
+    legendBarText: { fontSize: 12, color: Colors.SecondaryText },
+    legendBarIcon: { fontSize: 20, color: Colors.SecondaryText },
+    legendScroll: { flexGrow: 0, maxHeight: 112 },  // + the 28px bar = the 140 the legend took before
+    legendContent: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', paddingHorizontal: 12, paddingTop: 2, paddingBottom: 8, gap: 8 },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     legendChip: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: Colors.InputBorderNormal, backgroundColor: Colors.GreyContentBackground },
     swatch: { width: 18, height: 18, borderRadius: 3, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },

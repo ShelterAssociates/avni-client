@@ -85,6 +85,32 @@ describe("legends", () => {
         ]);
     });
 
+    it("puts a count on every category it was given one for", () => {
+        const colors = assignAnswerColors(["Yes", "No"]);
+        const legend = answerLegend(colors, {Yes: 34, No: 12, noData: 5, filteredOut: 9});
+        assert.deepEqual(legend.map(row => [row.label, row.count]), [
+            ["Yes", 34], ["No", 12], [STATUS_COLORS.noData.label, 5], [STATUS_COLORS.filteredOut.label, 9],
+        ]);
+    });
+
+    it("leaves out a category nothing is drawn in", () => {
+        const colors = assignAnswerColors(["Yes", "No"]);
+        const legend = answerLegend(colors, {Yes: 34, No: 0, noData: 0, filteredOut: 2});
+        assert.deepEqual(legend.map(row => row.label), ["Yes", STATUS_COLORS.filteredOut.label]);
+    });
+
+    it("counts the status rows and keeps the interaction rows uncounted", () => {
+        const legend = statusLegend({counts: {notSurveyed: 7, registered: 3, duplicate: 1}});
+        assert.deepEqual(legend.map(row => [row.key, row.count]), [
+            ["notSurveyed", 7], ["registered", 3], ["duplicate", 1], ["selected", undefined], ["searchHit", undefined],
+        ]);
+    });
+
+    it("drops a status nothing is drawn in, duplicates included", () => {
+        const legend = statusLegend({counts: {notSurveyed: 0, registered: 5, duplicate: 0}});
+        assert.deepEqual(legend.map(row => row.key), ["registered", "selected", "searchHit"]);
+    });
+
     it("every status colour is a hex value with a label", () => {
         _.forEach(STATUS_COLORS, entry => {
             assert.match(entry.fill, /^#[0-9a-fA-F]{6}$/);

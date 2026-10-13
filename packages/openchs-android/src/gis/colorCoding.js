@@ -69,16 +69,29 @@ export function orderAnswerLabels(discoveredLabels, conceptAnswerNames = []) {
     return _.concat(known, _.difference(discovered, known));
 }
 
-export function statusLegend({includeDuplicate = true} = {}) {
+// A category nothing is drawn in is left out: an empty row is a line of legend the map pays for
+// and the worker cannot act on. A row counts are not supplied for is always kept.
+function withCount(row, counts) {
+    const count = counts[row.key];
+    if (!_.isNumber(count)) return row;
+    return count > 0 ? {...row, count} : null;
+}
+
+export function statusLegend({includeDuplicate = true, counts = {}} = {}) {
     const keys = ["notSurveyed", "registered", ...(includeDuplicate ? ["duplicate"] : []), "selected", "searchHit"];
-    return keys.map(key => ({key, label: STATUS_COLORS[key].label, color: STATUS_COLORS[key].fill, ...(key === "duplicate" && {stripes: DUPLICATE_STRIPES})}));
+    const rows = keys.map(key => ({key, label: STATUS_COLORS[key].label, color: STATUS_COLORS[key].fill, ...(key === "duplicate" && {stripes: DUPLICATE_STRIPES})}));
+    return _.compact(rows.map(row => withCount(row, counts)));
 }
 
 // Legend for an active filter, derived from the exact colour map the map is
-// using — there is no separate legend list to fall out of date.
-export function answerLegend(answerColors) {
-    const rows = _.map(answerColors, (color, label) => ({key: label, label, color}));
-    return _.concat(rows, [{key: "noData", label: STATUS_COLORS.noData.label, color: STATUS_COLORS.noData.fill}]);
+// using — there is no separate legend list to fall out of date. The two greys are listed with it
+// so every colour on screen has a row: a household that did not answer, and an empty structure.
+export function answerLegend(answerColors, counts = {}) {
+    const answers = _.map(answerColors, (color, label) => ({key: label, label, color}));
+    const greys = ["noData", "filteredOut"].map(key => ({key, label: STATUS_COLORS[key].label, color: STATUS_COLORS[key].fill}));
+    // filteredOut is only meaningful once counted; without counts the legend keeps its old shape.
+    const rows = _.concat(answers, _.isEmpty(counts) ? [greys[0]] : greys);
+    return _.compact(rows.map(row => withCount(row, counts)));
 }
 
 // Label used by the built-in duplicate-registration filter.

@@ -33,6 +33,32 @@ export function duplicateCount(statusMap) {
     return _.filter(statusMap, entry => entry.status === STATUS.duplicate).length;
 }
 
+// How many structures the map draws in each survey-status colour. Counted over the structures on
+// the map, not over statusMap, which also holds households no structure covers.
+export function statusCounts(statusMap, keysOnMap) {
+    const counts = {notSurveyed: 0, registered: 0, duplicate: 0};
+    _.forEach(keysOnMap, key => {
+        const entry = statusMap[key];
+        if (!entry) counts.notSurveyed++;
+        else if (entry.status === STATUS.duplicate) counts.duplicate++;
+        else counts.registered++;
+    });
+    return counts;
+}
+
+// The same for an active filter: one count per answer, plus the two greys the map also draws -
+// a household that did not answer this question, and a structure nobody is registered on.
+export function answerCounts(answerByKey, statusMap, keysOnMap) {
+    const counts = {noData: 0, filteredOut: 0};
+    _.forEach(keysOnMap, key => {
+        const label = answerByKey[key];
+        if (label) counts[label] = (counts[label] || 0) + 1;
+        else if (statusMap[key]) counts.noData++;
+        else counts.filteredOut++;
+    });
+    return counts;
+}
+
 // Whether this user's groups may see the answers of this subject type at
 // all. Without it the map still shows registered/not-surveyed (needed to
 // avoid duplicates) but offers no answer filters.

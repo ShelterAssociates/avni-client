@@ -4,6 +4,7 @@ import {Concept} from "avni-models";
 import {
     DUPLICATES_FILTER_KEY, STATUS, answerTable, applyConceptFilter, applyDuplicateFilter, applyFilter, buildFilterCatalog,
     buildStatusMap, canViewSubjectType, codedConceptsOnForm, codedConceptsOnForms, duplicateCount,
+    statusCounts, answerCounts,
 } from "../../src/gis/mapData";
 import {ANSWER_PALETTE} from "../../src/gis/colorCoding";
 
@@ -168,5 +169,40 @@ describe("applyDuplicateFilter", () => {
         const table = await answerTable(subjects, [TOILET]);
         assert.deepEqual(applyFilter({kind: "duplicates"}, {table, conceptService, statusMap}).answerByKey, {"2": "2 registrations"});
         assert.deepEqual(applyFilter({kind: "concept", concept: TOILET}, {table, conceptService, statusMap}).answerByKey, {"1": "No", "2": "Yes"});
+    });
+});
+
+describe("statusCounts", () => {
+    const statusMap = {
+        "1": {status: "registered", uuids: ["a"], count: 1},
+        "2": {status: "duplicate", uuids: ["b", "c"], count: 2},
+        "77": {status: "registered", uuids: ["d"], count: 1},   // household no structure covers
+    };
+
+    it("counts the structures the map draws, in each colour", () => {
+        assert.deepEqual(statusCounts(statusMap, ["1", "2", "3", "4"]), {notSurveyed: 2, registered: 1, duplicate: 1});
+    });
+
+    it("ignores households that are not on the map", () => {
+        assert.equal(statusCounts(statusMap, ["1", "2"]).registered, 1);
+    });
+
+    it("is all zeroes when the map has no structures", () => {
+        assert.deepEqual(statusCounts(statusMap, []), {notSurveyed: 0, registered: 0, duplicate: 0});
+    });
+});
+
+describe("answerCounts", () => {
+    const statusMap = {"1": {count: 1}, "2": {count: 1}, "3": {count: 1}, "77": {count: 1}};
+    const answerByKey = {"1": "Yes", "2": "Yes", "3": "No", "77": "Yes"};
+
+    it("counts one per answer, and both greys the map draws", () => {
+        // 4 and 5 are registered but unanswered; 6 has nobody on it.
+        const counts = answerCounts(answerByKey, {...statusMap, "4": {count: 1}, "5": {count: 1}}, ["1", "2", "3", "4", "5", "6"]);
+        assert.deepEqual(counts, {Yes: 2, No: 1, noData: 2, filteredOut: 1});
+    });
+
+    it("does not count an answer belonging to a household off the map", () => {
+        assert.equal(answerCounts(answerByKey, statusMap, ["1", "2", "3"]).Yes, 2);
     });
 });
