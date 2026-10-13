@@ -1,13 +1,17 @@
 import RNFS from 'react-native-fs';
 import General from '../utility/General';
 import GisConfig from '../gis/GisConfig';
-import {keepsMoreMapData} from '../gis/gisFile';
+import {isStructureCollection, slumFileName} from '../gis/gisFile';
 import GisMappingQueue from '../gis/GisMappingQueue';
 import {saveMapRegistrationSubjectTypes} from '../gis/mapRegistrationForms';
 
 const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 
 class GisSyncService {
+    static slumFilePath(avniUuid) {
+        return `${GIS_DIR}/${slumFileName(avniUuid)}`;
+    }
+
     // onMessage(text) receives one-line progress for the sync screen, e.g.
     // "Downloading map 2/4: Baliram Nagar". Optional.
     static async syncGisData(addressLevelService, onMessage = () => {}) {
@@ -44,9 +48,11 @@ class GisSyncService {
 
     static async downloadStructuresForSlum(avniUuid, slumName) {
         const path = `/component/get_structures_for_avni/?avni_uuid=${avniUuid}`;
-        const destPath = `${GIS_DIR}/structures_${avniUuid}.json`;
+        const destPath = GisSyncService.slumFilePath(avniUuid);
+        const backupPath = `${destPath}.bak`;
 
         General.logInfo('GisSyncService', `Downloading GIS for slum: ${slumName}`);
+        await GisSyncService.recoverBackup(destPath, backupPath);
 
         try {
             const response = await GisConfig.fetch(path);
@@ -56,14 +62,13 @@ class GisSyncService {
             }
             const text = await response.text();
             const next = JSON.parse(text);
-            const previous = (await RNFS.exists(destPath)) ? JSON.parse(await RNFS.readFile(destPath, 'utf8')) : null;
-            if (!keepsMoreMapData(previous, next)) {
-                General.logWarn('GisSyncService', `GIS for ${slumName} came back with less data than saved; keeping the saved copy`);
+            if (!isStructureCollection(next)) {
+                General.logWarn('GisSyncService', `GIS for ${slumName} is not a structure collection; keeping the saved copy`);
                 return false;
             }
-            await RNFS.writeFile(destPath, text, 'utf8');
+            await GisSyncService.replaceSlumFile(destPath, backupPath, text);
             await saveMapRegistrationSubjectTypes(next.map_registration_subject_types);
-            General.logInfo('GisSyncService', `GIS saved for ${slumName}: ${(next.features || []).length} structures, boundary ${next.boundary ? 'yes' : 'no'}`);
+            General.logInfo('GisSyncService', `GIS saved for ${slumName}: ${next.features.length} structures, boundary ${next.boundary ? 'yes' : 'no'}`);
             return true;
         } catch (e) {
             General.logWarn('GisSyncService', `GIS download failed for ${slumName}: ${e.message}`);
@@ -71,17 +76,33 @@ class GisSyncService {
         }
     }
 
-    // Used by MapPickerScreen to load structures offline
-    // static async loadStructures(avniUuid) {
-    //     const path = `${GIS_DIR}/structures_${avniUuid}.json`;
-    //     const exists = await RNFS.exists(path);
-    //     if (!exists) return null;
-    //     const raw = await RNFS.readFile(path, 'utf8');
-    //     return JSON.parse(raw);
-    // }
+    // The old file is renamed aside rather than copied (a rename costs nothing, a copy of a 5 MB
+    // slum does) and dropped once the new one is on disk, so a failed write never loses it.
+    static async replaceSlumFile(destPath, backupPath, text) {
+        if (await RNFS.exists(destPath)) await RNFS.moveFile(destPath, backupPath);
+        try {
+            await RNFS.writeFile(destPath, text, 'utf8');
+        } catch (e) {
+            await GisSyncService.recoverBackup(destPath, backupPath);
+            throw e;
+        }
+        if (await RNFS.exists(backupPath)) await RNFS.unlink(backupPath);
+    }
+
+    // A sync killed mid-write leaves the backup behind: it is the good copy when the new file
+    // never landed, and dead weight once it did.
+    static async recoverBackup(destPath, backupPath) {
+        if (!(await RNFS.exists(backupPath))) return;
+        if (await RNFS.exists(destPath)) {
+            await RNFS.unlink(backupPath);
+        } else {
+            General.logWarn('GisSyncService', `Restoring ${backupPath} left behind by an interrupted sync`);
+            await RNFS.moveFile(backupPath, destPath);
+        }
+    }
 
     static async hasLocalData(avniUuid) {
-        return await RNFS.exists(`${GIS_DIR}/structures_${avniUuid}.json`);
+        return await RNFS.exists(GisSyncService.slumFilePath(avniUuid));
     }
 
     static async clearAll() {

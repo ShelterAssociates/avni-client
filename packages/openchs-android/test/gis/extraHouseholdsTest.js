@@ -12,6 +12,10 @@ describe("extraHouseholds", () => {
     it("is empty when every household sits on a structure", () => {
         assert.deepEqual(extraHouseholds({"1": {count: 1}}, onMap), []);
     });
+
+    it("takes in a household whose structure is gone from the latest sync", () => {
+        assert.deepEqual(extraHouseholds({"1": {count: 1}}, ["2", "22A"]).map(h => h.key), ["1"]);
+    });
 });
 
 describe("validateExtraHouse", () => {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput, ScrollView, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput, ScrollView, Modal, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
 import DropDownPicker from 'react-native-dropdown-picker';
 import AppHeader from './common/AppHeader';
@@ -23,16 +23,17 @@ import ProgramService from '../service/program/ProgramService';
 import EncounterTypeService from '../service/EncounterTypeService';
 import EntityQueueService from '../service/EntityQueueService';
 import EntitySyncStatusService from '../service/EntitySyncStatusService';
+import GisSyncService from '../service/GisSyncService';
+import NoStructures from './gis/NoStructures';
 import { structureKey, STRUCTURE_KEY_SOURCE } from '../gis/structureNumber';
 import { STATUS_COLORS, ANSWER_STYLE, BOUNDARY_STYLE, DUPLICATE_STRIPES, statusLegend, answerLegend } from '../gis/colorCoding';
 import { hasStructures, mapCenter } from '../gis/mapCenter';
 import { EXTRA_BLANK, EXTRA_ON_MAP, EXTRA_TAKEN, extraHouseholds, validateExtraHouse } from '../gis/extraHouseholds';
-import { householdSummary } from '../gis/householdSummary';
+import { householdSummary, recentHouseholds } from '../gis/householdSummary';
 import {
     STATUS, buildStatusMap, buildFilterCatalog, applyFilter, canViewSubjectType, codedConceptsOnForms,
 } from '../gis/mapData';
 
-const GIS_DIR = `${RNFS.DocumentDirectoryPath}/gis`;
 const STATUS_FILTER = '__status__';
 const EXTRA_MESSAGES = {
     [EXTRA_BLANK]: 'Type a house number.',
@@ -44,13 +45,21 @@ const TOGGLABLE_STATUSES = ['notSurveyed', 'registered', 'duplicate'];  // selec
 // Filter lists per slum for this session, keyed by what they were built from.
 const filterCatalogs = {};
 
+// Sync renames the slum file aside while it writes the new one, so a stat can always lose the race.
+async function fileMtime(path) {
+    try {
+        return String((await RNFS.stat(path)).mtime);
+    } catch (e) {
+        return null;
+    }
+}
+
 // Parsed slum files for this session, keyed by path and invalidated when sync rewrites the file.
 const slumFiles = {};
-async function readSlumFile(path) {
+async function readSlumFile(path, mtime) {
     const t0 = Date.now();
-    const { mtime } = await RNFS.stat(path);
     const cached = slumFiles[path];
-    if (cached && String(cached.mtime) === String(mtime)) return cached.data;
+    if (cached && cached.mtime === mtime) return cached.data;
     const text = await RNFS.readFile(path, 'utf8');
     const data = Perf.time('map.parseGeojson', () => JSON.parse(text), {bytes: text.length});
     Perf.mark('map.readGeojson', {ms: Date.now() - t0});
@@ -98,6 +107,9 @@ class MapPickerScreen extends AbstractComponent {
             extraError: null,
             geojson: null,
             center: null,
+            noStructures: false,     // the latest sync brought none: NoStructures stands in for the map
+            noStructuresMessage: '',
+            recent: [],              // newest registrations of this slum, listed on that screen
             loading: true,
             filterLoading: false,
             selected: null,          // structure number tapped on the map
@@ -137,7 +149,20 @@ class MapPickerScreen extends AbstractComponent {
             this.focusedOnce = true;
             return;
         }
-        if (this.state.geojson) this.refreshStatus();
+        this.reloadIfFileChanged();
+    }
+
+    // A sync that ran while this screen was open has rewritten the slum file; the map must draw the
+    // structures of the latest sync, not the ones it was opened with.
+    async reloadIfFileChanged() {
+        const mtime = await fileMtime(GisSyncService.slumFilePath(this.state.avniUuid));
+        if (mtime !== this.loadedMtime) {
+            this.setState({ loading: true }, () => this.loadLocalGeoJson());
+        } else if (this.state.geojson) {
+            this.refreshStatus();
+        } else if (this.state.noStructures) {
+            this.showNoStructures(this.state.noStructuresMessage);
+        }
     }
 
     refreshStatus() {
@@ -309,32 +334,35 @@ class MapPickerScreen extends AbstractComponent {
                 this.goBack();
                 return;
             }
-            const path = `${GIS_DIR}/structures_${avniUuid}.json`;
-            if (!(await RNFS.exists(path))) {
-                this.noMapData(`No map data for ${this.state.slumName}. Please sync first.`);
+            const path = GisSyncService.slumFilePath(avniUuid);
+            const mtime = await fileMtime(path);
+            this.loadedMtime = mtime;
+            if (mtime === null) {
+                this.showNoStructures(`No map data for ${this.state.slumName} yet. Sync to download its structures.`);
                 return;
             }
-            const data = await readSlumFile(path);
-            const center = mapCenter(data);
+            const data = await readSlumFile(path, mtime);
+            const center = hasStructures(data) ? mapCenter(data) : null;
             if (!center) {
-                this.noMapData(`Neither structures nor the boundary are available for ${this.state.slumName} yet.`);
+                this.showNoStructures(`The latest sync brought no structures for ${this.state.slumName}.`);
                 return;
             }
-            const notice = hasStructures(data) ? null : `Structures are not available for ${this.state.slumName} yet. Only the slum boundary is shown.`;
-            this.setState({ geojson: data, center, notice }, () => this.loadSlumData());
+            this.setState({ geojson: data, center, notice: null, noStructures: false }, () => this.loadSlumData());
         } catch (e) {
             alert('Error loading map: ' + e.message);
             this.setState({ loading: false });
         }
     }
 
-    noMapData(message) {
-        alert(message);
-        if (this.state.slums.length > 1) {
-            this.setState({ loading: false, slumPickerOpen: true });
-        } else {
-            this.goBack();
-        }
+    // No structures to tap, so the extra-household flow is the whole screen. The status map is still
+    // built: it is what stops a second household being registered on a number already taken.
+    showNoStructures(message) {
+        const subjects = this.subjectsInCurrentSlum();
+        this.setState({
+            noStructures: true, noStructuresMessage: message, loading: false, notice: null,
+            geojson: null, center: null, filters: [], activeFilter: null,
+            statusMap: buildStatusMap(subjects), recent: recentHouseholds(subjects),
+        });
     }
 
     goBack() {
@@ -460,7 +488,7 @@ class MapPickerScreen extends AbstractComponent {
                 General.logError('MapPickerScreen', new Error(`map page could not load structures: ${data.message}`));
                 alert(`Could not draw the structures of ${this.state.slumName}. Please sync and try again.`);
             } else if (data.type === 'searchNotFound') {
-                alert('Structure not found on map');
+                this.offerExtraHouse(this.state.searchText);
             }
         } catch (e) {
             // ignore malformed messages from the page
@@ -478,7 +506,7 @@ class MapPickerScreen extends AbstractComponent {
 
     buildMapHTML() {
         const { geojson, center, statusMap, avniUuid } = this.state;
-        const geojsonUrl = `file://${GIS_DIR}/structures_${avniUuid}.json`;
+        const geojsonUrl = `file://${GisSyncService.slumFilePath(avniUuid)}`;
         return `<!DOCTYPE html>
 <html>
 <head>
@@ -754,8 +782,27 @@ if (window.L) {
 </html>`;
     }
 
+    // Rebuilt only when the slum file or what is registered changes; several renders read it.
     extrasNotOnMap() {
-        return extraHouseholds(this.state.statusMap, this.structureKeyList());
+        const { statusMap, geojson } = this.state;
+        if (this._extrasFor !== statusMap || this._extrasGeojson !== geojson) {
+            this._extrasFor = statusMap;
+            this._extrasGeojson = geojson;
+            this._extras = extraHouseholds(statusMap, this.structureKeyList());
+        }
+        return this._extras;
+    }
+
+    // A number the latest sync does not cover can only be an extra household.
+    offerExtraHouse(number) {
+        const key = structureKey(number);
+        if (!key) return;
+        Alert.alert(`#${key} is not on the map`,
+            'It is not among the structures from the latest sync. Register it as an extra house?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Register', onPress: () => this.setState({ extraPromptOpen: true, extraNumber: key, extraError: null }) },
+            ]);
     }
 
     addExtraHouse() {
@@ -884,7 +931,9 @@ if (window.L) {
     }
 
     renderControls() {
-        const { slums, avniUuid, slumPickerOpen, filters, activeFilter, filterOpen } = this.state;
+        const { slums, avniUuid, slumPickerOpen, filters, activeFilter, filterOpen, noStructures } = this.state;
+        if (noStructures && slums.length <= 1) return null;
+        const extras = noStructures ? 0 : this.extrasNotOnMap().length;
         const filterItems = [{ label: 'Survey status', value: STATUS_FILTER }, ...filters.map(f => ({ label: `${f.label} (${f.count})`, value: f.key }))];
         const dropdown = (props) => (
             <DropDownPicker
@@ -906,17 +955,26 @@ if (window.L) {
                         })}
                     </View>
                 )}
-                <View style={styles.control}>
-                    {dropdown({
-                        items: filterItems, value: activeFilter || STATUS_FILTER, open: filterOpen, searchable: true,
-                        setOpen: open => this.setState({ filterOpen: open, slumPickerOpen: false }),
-                        onSelectItem: item => this.selectFilter(_.find(filters, { key: item.value }) || null),
-                        modalTitle: 'Colour houses by', searchPlaceholder: 'Search filter',
-                    })}
-                </View>
-                <TouchableOpacity style={styles.extraButton} onPress={() => this.setState({ extraMenuOpen: true })}>
-                    <AvniIcon name="home-plus-outline" type="MaterialCommunityIcons" style={styles.extraIcon} />
-                </TouchableOpacity>
+                {!noStructures && (
+                    <View style={styles.control}>
+                        {dropdown({
+                            items: filterItems, value: activeFilter || STATUS_FILTER, open: filterOpen, searchable: true,
+                            setOpen: open => this.setState({ filterOpen: open, slumPickerOpen: false }),
+                            onSelectItem: item => this.selectFilter(_.find(filters, { key: item.value }) || null),
+                            modalTitle: 'Colour houses by', searchPlaceholder: 'Search filter',
+                        })}
+                    </View>
+                )}
+                {!noStructures && (
+                    <TouchableOpacity style={styles.extraButton} onPress={() => this.setState({ extraMenuOpen: true })}>
+                        <AvniIcon name="home-plus-outline" type="MaterialCommunityIcons" style={styles.extraIcon} />
+                        {extras > 0 && (
+                            <View style={styles.extraBadge}>
+                                <Text style={styles.extraBadgeText}>{extras > 99 ? '99+' : extras}</Text>
+                            </View>
+                        )}
+                    </TouchableOpacity>
+                )}
             </View>
         );
     }
@@ -1015,7 +1073,7 @@ if (window.L) {
     }
 
     render() {
-        const { loading, filterLoading, geojson, center, searchText, slumName, notice } = this.state;
+        const { loading, filterLoading, geojson, center, searchText, slumName, notice, noStructures } = this.state;
 
         if (loading) {
             return (
@@ -1023,6 +1081,22 @@ if (window.L) {
                     <ActivityIndicator size="large" color={Colors.AccentColor} />
                     <Text style={styles.loadingText}>Loading map...</Text>
                 </View>
+            );
+        }
+
+        if (noStructures) {
+            return (
+                <CHSContainer style={styles.container}>
+                    <AppHeader title={slumName || 'Slum map'} func={() => this.goBack()} hideIcon={true} />
+                    {this.renderExtraPrompt()}
+                    {this.renderControls()}
+                    <NoStructures
+                        message={this.state.noStructuresMessage}
+                        recent={this.state.recent}
+                        onRegister={() => this.setState({ extraPromptOpen: true, extraNumber: '', extraError: null })}
+                        onOpenHousehold={uuid => require('../utility/CHSNavigator').default.navigateToIndividualRegistrationDetails(this, uuid, null)}
+                    />
+                </CHSContainer>
             );
         }
 
@@ -1155,6 +1229,8 @@ const styles = StyleSheet.create({
     pickerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
     extraButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
     extraIcon: { fontSize: 24, color: Colors.AccentColor },
+    extraBadge: { position: 'absolute', top: 0, right: 0, minWidth: 16, height: 16, paddingHorizontal: 3, borderRadius: 8, backgroundColor: Colors.ValidationError, alignItems: 'center', justifyContent: 'center' },
+    extraBadgeText: { fontSize: 10, fontWeight: 'bold', color: Colors.TextOnPrimaryColor },
     promptSheet: { backgroundColor: Colors.cardBackgroundColor, borderRadius: 8, padding: 16, marginHorizontal: 24 },
     promptInput: { borderBottomWidth: 1, borderBottomColor: Colors.InputBorderNormal, fontSize: 16, color: Colors.DefaultPrimaryColor, paddingVertical: 6 },
     promptError: { color: Colors.ValidationError, fontSize: 12, marginTop: 8 },

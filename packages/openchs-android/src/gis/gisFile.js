@@ -1,7 +1,11 @@
-import {hasBoundary, hasStructures} from "./mapCenter";
+// The latest sync always wins: a slum's structures, numbers and footprints all change on the
+// website, so whatever the newest successful download says replaces the saved copy. The only
+// payload worth refusing is one that is not a slum file at all - an error page or a proxy's
+// JSON would otherwise wipe good structures.
+export function isStructureCollection(payload) {
+    return !!payload && payload.type === "FeatureCollection" && Array.isArray(payload.features);
+}
 
-// A slum the server temporarily answers with nothing must not wipe the houses the phone already has.
-export function keepsMoreMapData(previous, next) {
-    if (!previous || typeof previous !== "object") return true;
-    return (hasStructures(next) || !hasStructures(previous)) && (hasBoundary(next) || !hasBoundary(previous));
+export function slumFileName(avniUuid) {
+    return `structures_${avniUuid}.json`;
 }

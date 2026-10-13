@@ -1,21 +1,23 @@
 import {assert} from "chai";
-import {keepsMoreMapData} from "../../src/gis/gisFile";
+import {isStructureCollection, slumFileName} from "../../src/gis/gisFile";
 
-const withHouses = {type: "FeatureCollection", boundary: {type: "Polygon", coordinates: [[[0, 0]]]}, features: [{type: "Feature"}]};
-const boundaryOnly = {type: "FeatureCollection", boundary: {type: "Polygon", coordinates: [[[0, 0]]]}, features: []};
-const empty = {type: "FeatureCollection", features: []};
-
-describe("keepsMoreMapData", () => {
-    it("is false when the download would lose houses or the boundary the phone already has", () => {
-        assert.isFalse(keepsMoreMapData(withHouses, boundaryOnly));
-        assert.isFalse(keepsMoreMapData(withHouses, empty));
-        assert.isFalse(keepsMoreMapData(boundaryOnly, empty));
+describe("isStructureCollection", () => {
+    it("accepts a slum file, however little it carries", () => {
+        assert.isTrue(isStructureCollection({type: "FeatureCollection", features: [{}], boundary: {coordinates: [[]]}}));
+        assert.isTrue(isStructureCollection({type: "FeatureCollection", features: [], boundary: null}));
     });
 
-    it("is true for the first download, for same or more data, and when the old file is unreadable", () => {
-        assert.isTrue(keepsMoreMapData(null, empty));
-        assert.isTrue(keepsMoreMapData(boundaryOnly, withHouses));
-        assert.isTrue(keepsMoreMapData(withHouses, withHouses));
-        assert.isTrue(keepsMoreMapData("not json", empty));
+    it("refuses anything that is not one, so a bad response cannot replace good structures", () => {
+        assert.isFalse(isStructureCollection(null));
+        assert.isFalse(isStructureCollection("not json"));
+        assert.isFalse(isStructureCollection({error: "no slum is mapped to avni_uuid x"}));
+        assert.isFalse(isStructureCollection({type: "FeatureCollection"}));
+        assert.isFalse(isStructureCollection({type: "Feature", features: []}));
+    });
+});
+
+describe("slumFileName", () => {
+    it("is the same name sync writes and the map reads", () => {
+        assert.equal(slumFileName("abc-123"), "structures_abc-123.json");
     });
 });
