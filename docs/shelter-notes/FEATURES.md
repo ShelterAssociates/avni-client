@@ -104,6 +104,28 @@ They are independent tick-boxes. If both are ticked, **"All" wins**. With neithe
 numbers are drawn. Labels are only rendered for buildings currently on screen, so turning them on
 in a large slum stays fast.
 
+### 2.5a The legend: counts, and folding it away
+
+Every legend row shows **how many structures the map is drawing in it** — `Registered (810)`,
+`Yes (391)`. Under a filter the legend also lists the two greys, so every colour on screen has a
+row and the numbers add up to the whole slum:
+
+| Row | Means |
+|---|---|
+| one row per answer | houses whose household gave that answer |
+| **No data (n)** | a household is registered, but it did not answer this question |
+| **Not surveyed (n)** | nobody is registered on that structure |
+
+`Selected` and `Search result` carry no count — they are what you are doing, not a category of
+house. A category nothing is drawn in is left out rather than shown as `(0)`.
+
+Unticking a row greys its houses but **keeps its count**: the number says how many houses are in
+that category, which does not change because you hid them.
+
+The legend header — `Legend · 4 categories` — **folds the legend away** when tapped, giving the
+whole strip back to the map; tap again to bring it back. It starts open, and whichever way you
+leave it stays that way as you switch filters.
+
 ### 2.6 Searching for a house
 
 - Type into the search box at the top and **suggestions appear as you type**, listing matching

@@ -6,7 +6,7 @@ with the code it describes and visible to anyone with the fork.
 - **Fork:** `ShelterAssociates/avni-client`
 - **Our branch:** `shelter-master` — all Shelter work
 - **Mirror branch:** `master` — always byte-identical to `avniproject/avni-client`, never receives our commits
-- **State:** 27 Shelter commits, merged with upstream `3056a2145` on 2026-10-13
+- **State:** 28 Shelter commits, merged with upstream `3056a2145` on 2026-10-13
 
 ## The documents
 
