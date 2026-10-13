@@ -22,7 +22,7 @@ Shelter Associates surveys slum households with the Avni app. Shelter also digit
  GIS server ◀─map_subject_to_structure── GisMappingQueue (disk queue, flushed after every sync)
 ```
 
-1. **Sync** (`SyncComponent` → `GisSyncService.syncGisData`): after a successful Avni sync the app (a) flushes queued household↔structure links to the GIS server and (b) downloads `GET /component/get_structures_for_avni/?avni_uuid=<AddressLevel uuid>` for every synced `Slum` address level into `files/gis/structures_<uuid>.json`. Progress lines appear on the sync screen ("Downloading map 2/4: Alase Slum"). Failures are logged, never block the sync. A download that would *lose* data (server answers with fewer houses/no boundary than the saved file) is ignored and the saved file kept (`gisFile.keepsMoreMapData`).
+1. **Sync** (`SyncComponent` → `GisSyncService.syncGisData`): after a successful Avni sync the app (a) flushes queued household↔structure links to the GIS server and (b) downloads `GET /component/get_structures_for_avni/?avni_uuid=<AddressLevel uuid>` for every synced `Slum` address level into `files/gis/structures_<uuid>.json`. Progress lines appear on the sync screen ("Downloading map 2/4: Alase Slum"). Failures are logged, never block the sync. **The newest successful download always replaces the saved file**, including one with fewer structures or none at all — structures get moved, renumbered and removed when a slum is re-digitised, so the latest response is the truth. The write is backup-then-commit: the saved file is renamed to `.bak`, the new one written, the `.bak` dropped on success and restored if the write throws, and a `.bak` left by a sync killed mid-write is recovered on the next run. The only payload refused is one that is not a slum file at all (`gisFile.isStructureCollection`), so a proxy error page cannot wipe good structures.
 2. **Open the map** — three ways:
    - Register → subject type/program → map (**pick mode**): choosing an empty house opens the registration form with the house number pre-filled; choosing a registered house opens that household.
    - Home tab → round map button → "What are you filling?" → map (**browse mode**).
@@ -96,7 +96,7 @@ Two or more households registered on the same house number (offline double regis
 | `src/gis/mapData.js` | `buildStatusMap`, `answerTable`, `buildFilterCatalog`, `applyFilter`, `codedConceptsOnForms`, privilege check | `mapDataTest.js` |
 | `src/gis/mapCenter.js` | `mapCenter`, `hasStructures`, `hasBoundary` | `mapCenterTest.js` |
 | `src/gis/householdSummary.js` | Details card data | `householdSummaryTest.js` |
-| `src/gis/gisFile.js` | `keepsMoreMapData` sync guard | `gisFileTest.js` |
+| `src/gis/gisFile.js` | `isStructureCollection` payload check, `slumFileName` | `gisFileTest.js` |
 | `src/gis/mapEntry.js` | Is the map available; synced slums | `mapEntryTest.js` |
 | `src/gis/mapBrowser.js` | Registrable subject types, registration choices, work lists, `openMapBrowser` (Realm-backed glue, no unit tests) | — |
 | `src/service/GisSyncService.js` | Download per slum at sync; progress messages | — |

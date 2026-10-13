@@ -112,6 +112,10 @@ in a large slum stays fast.
 - Matching ignores padding and spacing, so `35`, `0035` and ` 35 ` all find the same house, and
   `22A` matches `0022 A`
 - Letters are accepted — the keyboard is the normal one, not a number pad
+- A number the **latest sync does not cover** — never digitised, or removed from the website since —
+  is not a dead end: *"#35 is not on the map. It is not among the structures from the latest sync.
+  Register it as an extra house?"* Answering **Register** opens the extra-house box with the number
+  already filled in (see 2.9)
 - The × clears the box
 
 ### 2.7 Choosing what you are looking at
@@ -137,8 +141,10 @@ The × clears the selection.
 
 ### 2.9 Houses that are not on the map
 
-Some households have no footprint drawn — the building was never digitised, or it is a newly
-built house. The **house-plus button** beside the dropdowns handles these:
+Some households have no footprint drawn — the building was never digitised, it is a newly
+built house, or the structure it sat on was removed when the slum was re-digitised. The
+**house-plus button** beside the dropdowns handles these, and carries a **count badge** when
+there are any, so the map says up front how much of the slum it cannot show:
 
 | Option | What it does |
 |---|---|
@@ -155,6 +161,17 @@ Two rules keep the data clean:
 
 Because these houses have no footprint, no household↔building link is sent to the GIS server for
 them — there is nothing to link them to.
+
+### 2.10 When a slum has no structures at all
+
+A slum can arrive with nothing to tap: it has not been digitised yet, nothing has synced yet, or
+its structures were removed on the website. Instead of the map, the screen then shows
+**Register extra household** as a full-width button, with that slum's **recent registrations**
+listed below it — number, registration date, tappable to open the household. The slum dropdown
+stays available for a worker assigned to several slums.
+
+There is nothing to tap, so a household can only be recorded through the extra-house flow — which
+is exactly right when no building footprint exists to attach it to.
 
 ---
 

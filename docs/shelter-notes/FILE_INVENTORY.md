@@ -11,13 +11,15 @@ What this fork changes, and where future upstream merges will hurt.
 
 | Metric | Count |
 |---|---|
-| Tracked files in repo | 1314 |
-| Files we added | 34 |
+| Tracked files in repo | 1352 |
+| Files we added | 36 |
 | Avni files we modified | 27 |
 | Avni files we deleted | 0 |
-| **Our total footprint** | **61 files, +6110 / −102** |
+| **Our total footprint** | **63 files, +6449 / −102** |
 
 We delete nothing of Avni's and add far more than we change — the work is overwhelmingly additive, which is why merges have stayed cheap so far.
+
+The footprint counts **code only**. These fork notes are a further 36 files (+2607) under `docs/shelter-notes/`; upstream has nothing at those paths, so they cannot conflict and are left out of the conflict-surface arithmetic. Measured at `9283dca4f` (2026-10-14).
 
 ## Regenerating this document
 
@@ -38,11 +40,11 @@ done | sort -k2 -rn
 
 ---
 
-## 1. Files we added (34)
+## 1. Files we added (36)
 
 Upstream has no file at these paths, so **these can never conflict.** Safe by construction.
 
-### GIS core — `src/gis/` (14 files, 763 lines)
+### GIS core — `src/gis/` (14 files, 782 lines)
 
 | File | Lines |
 |---|---|
@@ -56,25 +58,28 @@ Upstream has no file at these paths, so **these can never conflict.** Safe by co
 | `src/gis/structureNumber.js` | 41 |
 | `src/gis/mapCenter.js` | 25 |
 | `src/gis/extraHouseholds.js` | 24 |
-| `src/gis/householdSummary.js` | 19 |
+| `src/gis/householdSummary.js` | 34 |
 | `src/gis/filterColors.js` | 16 |
 | `src/gis/mapEntry.js` | 9 |
-| `src/gis/gisFile.js` | 7 |
+| `src/gis/gisFile.js` | 11 |
 
-### Views and services (4 files, 1334 lines)
+### Views and services (5 files, 1461 lines)
 
 | File | Lines | Purpose |
 |---|---|---|
-| `src/views/MapPickerScreen.js` | 1172 | the map screen itself |
-| `src/service/GisSyncService.js` | 93 | pulls GIS data on sync |
+| `src/views/MapPickerScreen.js` | 1248 | the map screen itself |
+| `src/service/GisSyncService.js` | 114 | pulls GIS data on sync; the newest download replaces the slum file |
 | `src/views/gis/MapChoices.js` | 54 | "what are you filling?" chooser |
+| `src/views/gis/NoStructures.js` | 50 | stands in for the map when a sync brings no structures |
 | `src/views/common/BrandLogos.js` | 15 | Avni × Shelter logo pair |
 
-### Tests — `test/gis/` (13 files, 808 lines)
+### Tests — `test/gis/` + `test/service/` (14 files, 954 lines)
 
-`GisConfigTest` · `GisMappingQueueTest` · `colorCodingTest` · `extraHouseholdsTest` · `filterColorsTest` · `gisFileTest` · `householdSummaryTest` · `mapCenterTest` · `mapDataTest` · `mapEntryTest` · `mapRegistrationFormsTest` · `observationAnswersTest` · `structureNumberTest`
+`GisConfigTest` · `GisMappingQueueTest` · `colorCodingTest` · `extraHouseholdsTest` · `filterColorsTest` · `gisFileTest` · `householdSummaryTest` · `mapCenterTest` · `mapDataTest` · `mapEntryTest` · `mapRegistrationFormsTest` · `observationAnswersTest` · `structureNumberTest` · `GisSyncServiceTest` (in `test/service/`)
 
-**91 tests, all passing** as of the 2026-10-13 merge.
+**103 tests, all passing** as of `9283dca4f` (2026-10-14). `GisSyncServiceTest` is the only one
+that is not a pure-function test: it mocks `react-native-fs` onto a real temp directory, because
+what it checks is which file survives a failed or interrupted download.
 
 ### Assets and config (3 files)
 

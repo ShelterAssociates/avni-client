@@ -235,7 +235,63 @@ problem usually repeats.
 
 ---
 
-## 13. Notes on diagnosis
+## 13. The map kept showing structures the server had already changed
+
+**Symptom.** Three things reported together. An updated KML did not replace the copy on the
+phone, so the map kept drawing the old one. A structure deleted on the website stayed on the map
+after a sync. And because it was still drawn, a worker could tap it and fill household
+information onto a building that no longer exists.
+
+**What it was not.** Not the server. `component/avni_map.py` hard-deletes components — there is no
+soft-delete column — and rebuilds `features` from a live query on every request, so the response
+has always been a correct current snapshot and deletion is signalled by the structure simply being
+absent. Not Avni sync either: the slum file never travels on it. Avni sync brings the Slum
+`AddressLevel` rows; `GisSyncService` then fetches each slum's footprints from our own Django
+endpoint afterwards. The whole fault was client-side.
+
+**Root cause.** `downloadStructuresForSlum` had three exits that all mean *keep the stale file* —
+a non-OK response, the staleness guard refusing, and a bare `catch` — each one a single `logWarn`
+and nothing else. The stale file is what both the map screen and the WebView read, so any of the
+three froze the map indefinitely.
+
+The guard, `keepsMoreMapData()`, was the origin of two of them:
+
+- **It parsed the previously saved file on every sync, only to decide whether to overwrite it.**
+  For a 9k-polygon slum that is two fully parsed copies — tens of megabytes each — alive at the
+  same moment, on low-end phones. Anything thrown in that window, an out-of-memory above all,
+  fell into the `catch` and became a silent "keep the old file".
+- **It refused any response carrying fewer structures**, which was deliberate (`0c4522c7d`,
+  "sync keeps a good slum file when the server answers with less") and does stop a mid-upload
+  empty response. It also made a slum whose structures were all removed impossible to correct.
+
+A *single* deleted structure passed the guard, which is why reading the code could not settle
+which exit was firing in the field — the three are indistinguishable without the device log.
+
+**Fix** (`9283dca4f`). The newest successful download always wins. The saved file is renamed
+aside, the new one written, the rename dropped on success and restored if the write throws, and a
+`.bak` left by a sync killed mid-write is recovered on the next run — a rename costs nothing where
+a 5 MB copy does, and the old file is never parsed again. The only payload refused now is one that
+is not a slum file at all, so an error page cannot wipe good structures while a shrunken,
+renumbered or empty one always lands.
+
+Once deletions propagate, "this slum has no structures" becomes a real state rather than a bug, so
+it now shows the extra-household flow and the slum's recent registrations instead of an alert that
+bounced the worker out of the screen.
+
+**Why no "missing structure" marker was added.** Drawing a deleted structure in a *missing* colour
+would mean keeping its geometry, diffing each new file against the old one and carrying dead
+features forward — more memory on exactly the phones that are already tight, and a partial
+re-creation of the staleness this fixes. "Missing" is left derived instead: the structure is
+absent, so `extraHouseholds()` picks up the household stranded on it with no new state at all, and
+a structure re-added later needs no cleanup.
+
+**Worth repeating.** A guard that protects the cache by *reading* the cache costs what the cache
+costs. This one doubled peak memory on the largest slums to answer a question — "did the server
+send less?" — that the new payload could have answered on its own.
+
+---
+
+## 14. Notes on diagnosis
 
 Two habits that paid off and are worth repeating:
 

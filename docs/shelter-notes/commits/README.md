@@ -32,6 +32,7 @@ One file per commit. The first 25 were written on base upstream `9f7bda055`; ups
 | 25 | [`e1dba0e83`](25-e1dba0e83-server-driven-map-and-navigation.md) | 2026-09-26 | gis: let the server pick which registrations use the map, and keep the map alive across one |
 | 26 | [`f299d8a8f`](26-f299d8a8f-filter-refresh-and-render-cost.md) | 2026-09-26 | gis: refresh the filter list with the map, and stop scanning Realm on every render |
 | 27 | [`16899f61a`](27-16899f61a-merge-upstream-18-1.md) | 2026-10-13 | **merge** upstream/master 18.1 (`3056a2145`) — 135 commits, 1 conflict |
+| 28 | [`9283dca4f`](28-9283dca4f-latest-sync-owns-the-map.md) | 2026-10-14 | gis: the newest sync owns the map, and a slum with no structures offers the extra-household flow |
 
 ## Phases
 
@@ -44,3 +45,4 @@ One file per commit. The first 25 were written on base upstream `9f7bda055`; ups
 | 5 | 19-23 | Branding - released as 1.0.0 |
 | 6 | 24 | Field feedback: the Realm crash and interface problems |
 | 7 | 25 | Configurability: server-driven map selection, navigation, houses off the map |
+| 8 | 28 | The slum file follows the server: deletions and renumbering reach the map, no-structure slums get a screen |
